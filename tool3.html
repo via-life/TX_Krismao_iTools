@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>多轮会话渲染 · iTools</title>
+<link rel="stylesheet" href="css/styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+</head>
+<body>
+<div class="tool-page">
+  <div class="aurora"></div>
+  <nav class="topnav">
+    <a class="topnav__back" href="index.html">← 返回</a>
+    <div class="topnav__logo">iT</div>
+    <span class="topnav__title">多轮会话渲染</span>
+    <span class="topnav__tag">需求三 · 拉题结果可视化</span>
+    <span class="topnav__spacer"></span>
+    <button class="btn btn--ghost btn--sm" id="remap-btn" hidden>重新选择列</button>
+  </nav>
+
+  <div class="tool-body tool-body--wide">
+    <div class="section" id="import-section">
+      <div class="section__title"><span class="section__step">1</span>选择模式并导入表格</div>
+      <div class="card" style="margin-bottom:14px">
+        <label class="field-check" style="cursor:pointer"><input type="checkbox" id="dual-toggle" /> 双模型对照（左右各渲染一个 messages 列）</label>
+        <span class="field__hint" style="display:block;margin-top:6px">messages 列即拉题结果里每个 session 的完整对话（OpenAI messages 数组，如 session_answer 列）。</span>
+      </div>
+      <div class="dropzone glass" id="dropzone">
+        <div class="dropzone__icon">💬</div>
+        <div class="dropzone__title">将文件拖到此处，或点击选择</div>
+        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b> / <b>.json</b></div>
+        <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
+        <input id="file-input" type="file" accept=".csv,.xlsx,.xls,.json" hidden />
+        <div class="dropzone__file" id="file-name" hidden></div>
+      </div>
+      <div class="status" id="status" hidden></div>
+    </div>
+
+    <div class="section" id="render-section" hidden>
+      <div class="render-layout">
+        <aside class="render-sidebar">
+          <div class="render-sidebar__head" id="sess-count">会话</div>
+          <div id="sess-list"></div>
+        </aside>
+        <div class="render-main">
+          <div class="render-main__bar">
+            <div>
+              <div class="render-main__title" id="main-title">—</div>
+              <div class="render-main__sub" id="main-sub"></div>
+            </div>
+            <span class="topnav__spacer"></span>
+            <button class="btn btn--ghost btn--sm" id="export-one">导出当前 PNG</button>
+            <button class="btn btn--primary btn--sm" id="export-all">导出全部 (zip)</button>
+          </div>
+          <div class="render-scroll" id="render-scroll">
+            <div class="empty-hint">选择左侧会话查看渲染</div>
+          </div>
+        </div>
+      </div>
+      <div class="status is-warn" style="margin-top:12px">提示：跨域鉴权图片（如 hunyuan 内部链接）可能因浏览器 CORS 无法计入 PNG（显示空白），此时可点「查看原图」在新标签打开。本工具不把 PNG 写回 xlsx。</div>
+    </div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox"><img id="lb-img" alt="" /></div>
+<div class="drop-overlay" id="drop-overlay" hidden>
+  <div class="drop-overlay__inner"><div class="drop-overlay__icon">📥</div><div class="drop-overlay__text">松开导入文件</div></div>
+</div>
+
+<script src="js/common.js"></script>
+<script src="js/mapping.js"></script>
+<script src="js/tool3.js"></script>
+</body>
+</html>

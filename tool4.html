@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>转 tlabel jsonl · iTools</title>
+<link rel="stylesheet" href="css/styles.css" />
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<div class="tool-page">
+  <div class="aurora"></div>
+  <nav class="topnav">
+    <a class="topnav__back" href="index.html">← 返回</a>
+    <div class="topnav__logo">iT</div>
+    <span class="topnav__title">转 tlabel jsonl</span>
+    <span class="topnav__tag">需求四 · DCG / GSB</span>
+    <span class="topnav__spacer"></span>
+    <button class="btn btn--ghost btn--sm" id="remap-btn" hidden>重新选择列</button>
+  </nav>
+
+  <div class="tool-body">
+    <div class="section">
+      <div class="section__title"><span class="section__step">1</span>选择模式并导入表格</div>
+      <div class="card" style="margin-bottom:14px">
+        <div class="switch-row">
+          <label class="field-check" style="cursor:pointer"><input type="checkbox" id="dual-toggle" /> 双模型（GSB 对照，输出 model_2_response / model_2_id）</label>
+        </div>
+        <span class="field__hint">单模型仅输出 trace_id / session_id / user_query / model_1_response / model_1_id；勾选后追加第二模型两列。</span>
+      </div>
+      <div class="dropzone glass" id="dropzone">
+        <div class="dropzone__icon">🏷️</div>
+        <div class="dropzone__title">将文件拖到此处，或点击选择</div>
+        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b>，按 session_id 聚合取末轮</div>
+        <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
+        <input id="file-input" type="file" accept=".csv,.xlsx,.xls,.json" hidden />
+        <div class="dropzone__file" id="file-name" hidden></div>
+      </div>
+      <div class="status" id="status" hidden></div>
+    </div>
+
+    <div class="section" id="out-section" hidden>
+      <div class="section__title"><span class="section__step">2</span>转换结果</div>
+      <div class="card">
+        <div class="actions">
+          <button class="btn btn--primary" id="download-btn" disabled>下载 jsonl</button>
+          <span class="field__hint" id="summary"></span>
+        </div>
+      </div>
+      <div class="table-scroll" style="margin-top:14px">
+        <table class="data-table" id="preview"></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="drop-overlay" id="drop-overlay" hidden>
+  <div class="drop-overlay__inner"><div class="drop-overlay__icon">📥</div><div class="drop-overlay__text">松开导入文件</div></div>
+</div>
+
+<script src="js/common.js"></script>
+<script src="js/mapping.js"></script>
+<script src="js/tool4.js"></script>
+</body>
+</html>
