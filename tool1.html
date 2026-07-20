@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Excel 图片转 URL · iTools</title>
 <link rel="stylesheet" href="css/styles.css" />
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="js/lib/jszip.min.js"></script>
 </head>
 <body>
 <div class="tool-page">
@@ -19,11 +19,11 @@
 
   <div class="tool-body">
     <div class="section">
-      <div class="section__title"><span class="section__step">1</span>导入含内嵌图片的 xlsx</div>
+      <div class="section__title"><span class="section__step">1</span>上传文件</div>
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">🖼️</div>
         <div class="dropzone__title">将 .xlsx 拖到此处，或点击选择</div>
-        <div class="dropzone__desc">在浏览器本地解压 xlsx，按图片锚点提取每张嵌入图及其所在单元格</div>
+        <div class="dropzone__desc">在浏览器本地解压 xlsx，按图片锚点提取每张嵌入图及其所在单元格，再按下方配置上传转链接、写回表格瘦身</div>
         <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
         <input id="file-input" type="file" accept=".xlsx" hidden />
         <div class="dropzone__file" id="file-name" hidden></div>
@@ -31,45 +31,44 @@
       <div class="status" id="status" hidden></div>
     </div>
 
-    <div class="section" id="imgs-section" hidden>
-      <div class="section__title"><span class="section__step">2</span>提取结果</div>
-      <div class="actions" style="margin-bottom:14px">
-        <button class="btn btn--primary" id="dl-zip">下载所有图片 (zip)</button>
-        <label class="switch-row"><input type="checkbox" id="norm-header" checked /> 规范化表头（image_0→图1 等）</label>
-      </div>
-      <div class="img-grid" id="img-grid"></div>
-    </div>
-
     <div class="section" id="upload-section" hidden>
-      <div class="section__title"><span class="section__step">3</span>可配置上传（把图片转为内部链接，选填）</div>
-      <div class="status is-warn">从 GitHub Pages（github.io）向内网元宝/COS 端点发请求通常会被 <b>CORS</b> 拦截；此功能需端点对本页面放开跨域，或在内网环境使用。留空则只做提取/下载。</div>
-      <div class="card" style="margin-top:14px">
-        <div class="config-grid">
+      <div class="section__title"><span class="section__step">2</span>输入配置信息</div>
+      <div class="card">
+        <div class="field">
+          <label class="field__label">环境</label>
+          <div class="actions">
+            <label class="switch-row"><input type="radio" name="env" value="internal" checked /> 内部环境（内网，可直连元宝端点）</label>
+            <label class="switch-row"><input type="radio" name="env" value="public" /> 公网环境（GitHub Pages 等）</label>
+          </div>
+        </div>
+        <div class="status is-warn" id="env-hint">内部环境：请填写内网转链接端点与鉴权信息（x-id / x-token / x-route-env），可直接上传写回。</div>
+        <div class="config-grid" style="margin-top:14px">
           <div class="field">
             <label class="field__label">上传端点 URL</label>
-            <input class="input" id="up-url" placeholder="https://your-endpoint/upload" />
+            <input class="input" id="up-url" placeholder="https://内网转链接端点/upload" />
+            <span class="field__hint">对应 excel2url.py 的图片上传/转链接接口（内网元宝或 COS 转链接端点）。</span>
           </div>
           <div class="field">
-            <label class="field__label">请求头（JSON）</label>
-            <textarea class="textarea" id="up-headers" placeholder='{"x-id":"...","x-token":"...","x-route-env":"ci-613"}'></textarea>
-            <span class="field__hint">对应 excel2url.py config.json 的 test/prod headers（x-id / x-token / x-route-env 等）。</span>
+            <label class="field__label">x-id</label>
+            <input class="input" id="cfg-xid" placeholder="pressure_test_xxx" />
           </div>
           <div class="field">
-            <label class="field__label">上传方式</label>
-            <div class="actions">
-              <label class="switch-row"><input type="radio" name="up-mode" value="multipart" checked /> multipart/form-data</label>
-              <label class="switch-row"><input type="radio" name="up-mode" value="binary" /> 原始二进制 (POST body)</label>
-            </div>
+            <label class="field__label">x-token</label>
+            <input class="input" id="cfg-xtoken" placeholder="鉴权 token" />
           </div>
           <div class="field">
-            <label class="field__label">文件字段名（multipart 时）</label>
-            <input class="input" id="up-field" value="file" />
+            <label class="field__label">x-route-env</label>
+            <input class="input" id="cfg-xroute" value="ci-613" />
+            <span class="field__hint">内部环境必填（如 ci-613）；公网环境自动置为 --。</span>
           </div>
           <div class="field">
             <label class="field__label">返回体中 URL 的字段路径（点号分隔）</label>
-            <input class="input" id="up-path" placeholder="data.resource_url" />
+            <input class="input" id="up-path" value="resource_url" />
             <span class="field__hint">例：返回 {"data":{"resource_url":"http..."}} 则填 data.resource_url。留空则把整段响应文本当作 URL。</span>
           </div>
+        </div>
+        <div class="actions" style="margin-top:14px">
+          <label class="switch-row"><input type="checkbox" id="norm-header" checked /> 规范化表头（image_0→图1 等）</label>
         </div>
         <div class="actions" style="margin-top:16px">
           <button class="btn btn--primary" id="do-upload">开始上传并写回</button>

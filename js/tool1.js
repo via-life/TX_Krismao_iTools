@@ -11,11 +11,11 @@
   var NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 
   var state = { zip: null, fileName: '', images: [] };
-  // images: [{sheetNum, sheetPath, drawingPath, col0, row0, cellRef, media, bytes, blob, dataUrl, url}]
+  // images: [{sheetNum, sheetPath, drawingPath, col0, row0, cellRef, media, bytes, blob, url}]
   var el = {};
-  ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'imgs-section', 'img-grid',
-   'dl-zip', 'norm-header', 'upload-section', 'up-url', 'up-headers', 'up-field', 'up-path',
-   'do-upload', 'dl-mapping', 'dl-xlsx', 'up-status'].forEach(function (id) { el[id] = document.getElementById(id); });
+  ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status',
+   'upload-section', 'env-hint', 'up-url', 'cfg-xid', 'cfg-xtoken', 'cfg-xroute', 'up-path',
+   'norm-header', 'do-upload', 'dl-mapping', 'dl-xlsx', 'up-status'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   function setStatus(node, msg, kind) {
     node.hidden = false;
@@ -23,11 +23,25 @@
     node.textContent = msg;
   }
 
+  function envMode() { var r = document.querySelector('input[name="env"]:checked'); return r ? r.value : 'internal'; }
+  function applyEnv() {
+    if (envMode() === 'public') {
+      el['cfg-xroute'].value = '--';
+      el['cfg-xroute'].disabled = true;
+      setStatus(el['env-hint'], '公网环境（如 GitHub Pages）：向内网元宝/COS 端点发请求通常会被 CORS 拦截，需端点对本页面放开跨域。x-route-env 已置为 --。', 'warn');
+    } else {
+      el['cfg-xroute'].disabled = false;
+      if (el['cfg-xroute'].value === '--' || !el['cfg-xroute'].value) el['cfg-xroute'].value = 'ci-613';
+      setStatus(el['env-hint'], '内部环境：请填写内网转链接端点与鉴权信息（x-id / x-token / x-route-env），可直接上传写回。', 'warn');
+    }
+  }
+
   T.bindFileInput({ dropzone: el.dropzone, fileInput: el['file-input'], pickBtn: el['pick-btn'], onFile: onFile });
-  el['dl-zip'].addEventListener('click', downloadImagesZip);
   el['do-upload'].addEventListener('click', doUpload);
   el['dl-mapping'].addEventListener('click', downloadMapping);
   el['dl-xlsx'].addEventListener('click', downloadRewritten);
+  [].forEach.call(document.querySelectorAll('input[name="env"]'), function (r) { r.addEventListener('change', applyEnv); });
+  applyEnv();
 
   /* ---------- 列号 ↔ 字母 ---------- */
   function colLetter(col1) {
@@ -62,10 +76,9 @@
     }).then(function (imgs) {
       state.images = imgs;
       if (!imgs.length) { setStatus(el.status, '未在该 xlsx 中找到内嵌图片（图片可能是浮动/链接形式）。', 'warn'); return; }
-      setStatus(el.status, '共提取 ' + imgs.length + ' 张图片。', 'ok');
-      el['imgs-section'].hidden = false;
+      setStatus(el.status, '共提取 ' + imgs.length + ' 张图片。请在下方填写配置信息后上传写回。', 'ok');
       el['upload-section'].hidden = false;
-      return loadPreviews(imgs).then(renderGrid);
+      return loadBlobs(imgs);
     }).catch(function (e) { setStatus(el.status, '解析失败：' + e.message, 'error'); });
   }
 
@@ -141,37 +154,12 @@
     return out;
   }
 
-  function loadPreviews(imgs) {
+  function loadBlobs(imgs) {
     return Promise.all(imgs.map(function (im) {
       var f = state.zip.file(im.media);
       if (!f) return Promise.resolve();
-      return f.async('blob').then(function (blob) {
-        im.blob = blob;
-        im.dataUrl = URL.createObjectURL(blob);
-      });
+      return f.async('blob').then(function (blob) { im.blob = blob; });
     }));
-  }
-
-  function renderGrid() {
-    var html = '';
-    state.images.forEach(function (im, i) {
-      html += '<div class="img-item"><img src="' + (im.dataUrl || '') + '" alt="" />' +
-        '<div class="img-item__meta"><span class="img-item__cell">Sheet' + im.sheetNum + ' · ' + im.cellRef + '</span>' +
-        '<div class="img-item__url" id="url-' + i + '">' + (im.url ? T.escapeHtml(im.url) : '') + '</div></div></div>';
-    });
-    el['img-grid'].innerHTML = html;
-  }
-
-  /* ---------- 下载所有图片 zip ---------- */
-  function downloadImagesZip() {
-    var zip = new JSZip();
-    state.images.forEach(function (im, i) {
-      var ext = (im.media.split('.').pop() || 'png');
-      zip.file('Sheet' + im.sheetNum + '_' + im.cellRef + '_' + (i + 1) + '.' + ext, im.blob);
-    });
-    zip.generateAsync({ type: 'blob' }).then(function (b) {
-      T.downloadBlob(state.fileName.replace(/\.xlsx$/i, '') + '_images.zip', b);
-    });
   }
 
   /* ---------- 上传 ---------- */
@@ -183,20 +171,16 @@
   function uploadOne(im, cfg) {
     var opts = { method: 'POST', headers: {} };
     Object.keys(cfg.headers).forEach(function (k) { opts.headers[k] = cfg.headers[k]; });
-    if (cfg.mode === 'multipart') {
-      var fd = new FormData();
-      fd.append(cfg.field || 'file', im.blob, im.cellRef + '.' + (im.media.split('.').pop() || 'png'));
-      opts.body = fd;
-    } else {
-      opts.body = im.blob;
-    }
+    var fd = new FormData();
+    fd.append('file', im.blob, im.cellRef + '.' + (im.media.split('.').pop() || 'png'));
+    opts.body = fd;
     return fetch(cfg.url, opts).then(function (r) {
       var ct = r.headers.get('content-type') || '';
       if (ct.indexOf('json') !== -1) return r.json().then(function (j) { return { json: j, text: '' }; });
       return r.text().then(function (t) { return { json: null, text: t }; });
     }).then(function (res) {
       if (res.json) {
-        var u = cfg.path ? getByPath(res.json, cfg.path) : (res.json.url || res.json.resource_url || res.json);
+        var u = cfg.path ? getByPath(res.json, cfg.path) : (res.json.resource_url || res.json.resourceUrl || res.json.url || res.json);
         return u ? String(u) : '';
       }
       return (res.text || '').trim();
@@ -204,21 +188,22 @@
   }
 
   function doUpload() {
-    var cfg = { url: el['up-url'].value.trim(), field: el['up-field'].value.trim(),
-      path: el['up-path'].value.trim(),
-      mode: document.querySelector('input[name="up-mode"]:checked').value, headers: {} };
+    var headers = {};
+    var xid = el['cfg-xid'].value.trim(); if (xid) headers['x-id'] = xid;
+    var xtoken = el['cfg-xtoken'].value.trim(); if (xtoken) headers['x-token'] = xtoken;
+    var xroute = el['cfg-xroute'].value.trim(); if (xroute) headers['x-route-env'] = xroute;
+    var cfg = { url: el['up-url'].value.trim(), path: el['up-path'].value.trim(), headers: headers };
     if (!cfg.url) { setStatus(el['up-status'], '请先填写上传端点 URL。', 'error'); return; }
-    var ht = el['up-headers'].value.trim();
-    if (ht) { try { cfg.headers = JSON.parse(ht); } catch (e) { setStatus(el['up-status'], '请求头不是合法 JSON。', 'error'); return; } }
+    if (envMode() === 'internal' && !xroute) { setStatus(el['up-status'], '内部环境需填写 x-route-env（如 ci-613）。', 'error'); return; }
 
     var total = state.images.length, done = 0, ok = 0;
     setStatus(el['up-status'], '开始上传… 0/' + total);
     var chain = Promise.resolve();
-    state.images.forEach(function (im, i) {
+    state.images.forEach(function (im) {
       chain = chain.then(function () {
         return uploadOne(im, cfg).then(function (url) {
           im.url = url || '';
-          if (url) { ok++; var c = document.getElementById('url-' + i); if (c) c.textContent = url; }
+          if (url) ok++;
           done++;
           setStatus(el['up-status'], '上传中… ' + done + '/' + total + '（成功 ' + ok + '）');
         }).catch(function (e) {
@@ -231,7 +216,7 @@
       var hasUrl = state.images.some(function (im) { return im.url; });
       el['dl-mapping'].disabled = !hasUrl;
       el['dl-xlsx'].disabled = !hasUrl;
-      if (!ok) setStatus(el['up-status'], '全部上传失败（多为 CORS/鉴权问题）。可改用「下载所有图片」再走 itools 外网转链接服务。', 'error');
+      if (!ok) setStatus(el['up-status'], '全部上传失败（多为 CORS/鉴权问题）。请确认端点、鉴权信息，或在内部环境使用。', 'error');
       else setStatus(el['up-status'], '完成：成功 ' + ok + '/' + total + '。可下载映射 csv 或 _with_urls.xlsx。', 'ok');
     });
   }

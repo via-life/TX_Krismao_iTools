@@ -99,6 +99,42 @@
     });
   }
 
+  /* ---------- 解析为原始二维矩阵（保留全部列/空列，供“写回原表”用）---------- */
+  // 返回 { aoa: [[...header], [...row], ...], sheetName }
+  function parseFileMatrix(file) {
+    var name = (file.name || '').toLowerCase();
+    return readArrayBuffer(file).then(function (buffer) {
+      if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        var wb = XLSX.read(buffer, { type: 'array' });
+        var sheetName = wb.SheetNames[0];
+        var ws = wb.Sheets[sheetName];
+        var arr = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false, blankrows: false });
+        return { aoa: normalizeAoa(arr), sheetName: sheetName || 'Sheet1' };
+      }
+      var text = decodeBuffer(buffer);
+      if (name.endsWith('.json')) {
+        var p = parseJSON(text);
+        var aoa = [p.headers.slice()];
+        p.rows.forEach(function (r) { aoa.push(p.headers.map(function (h) { return r[h] == null ? '' : r[h]; })); });
+        return { aoa: normalizeAoa(aoa), sheetName: 'Sheet1' };
+      }
+      var res = Papa.parse(text, { header: false, skipEmptyLines: 'greedy', dynamicTyping: false });
+      return { aoa: normalizeAoa(res.data || []), sheetName: 'Sheet1' };
+    });
+  }
+
+  // 把每行补齐到相同列数，并统一为字符串
+  function normalizeAoa(arr) {
+    var width = 0;
+    arr.forEach(function (r) { if (r && r.length > width) width = r.length; });
+    return arr.map(function (r) {
+      r = r || [];
+      var out = [];
+      for (var c = 0; c < width; c++) out.push(r[c] == null ? '' : String(r[c]));
+      return out;
+    });
+  }
+
   /* ---------- 列名归一化与别名自动匹配 ---------- */
   function normalize(s) {
     return String(s || '').toLowerCase().replace(/[\s_\-]+/g, '').trim();
@@ -290,6 +326,7 @@
     decodeBuffer: decodeBuffer,
     readArrayBuffer: readArrayBuffer,
     parseFile: parseFile,
+    parseFileMatrix: parseFileMatrix,
     normalize: normalize,
     matchHeader: matchHeader,
     matchIndexedColumns: matchIndexedColumns,

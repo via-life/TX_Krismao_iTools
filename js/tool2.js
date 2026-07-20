@@ -1,27 +1,28 @@
 /* ============================================================
-   tool2.js —— 数据聚合（移植 generate_session_json.py）
-   按 session_id 分组、round_id 排序，把每个 session 的多轮
-   prompt+图片聚合成一行 JSON，输出 xlsx（默认列 L1/L2/L3/用户问题）。
+   tool2.js —— 数据聚合（0717 反馈调整）
+   保留上传表原样，按 cid 分组、round_id 排序，把每个 session 的
+   多轮内容聚合成一段 JSON（[{"user prompt","image_url","location",...}]），
+   写入「从左往右第一个空白列」（表头命名 session），其它列/行内容不变。
+   聚合 JSON 写在每个 session 的第一行。
    ============================================================ */
 (function () {
   'use strict';
   var T = window.iTools;
 
   var FIELDS = [
-    { key: 'prompt', label: '提问列', required: true, desc: '用户提问 / prompt',
-      aliases: ['用户提问', '用户问题', 'prompt', 'user_prompt', 'user prompt', 'userquery', 'query', 'question'] },
-    { key: 'session_id', label: 'session_id', required: false, desc: '缺失时自动生成',
-      aliases: ['session_id', 'cid', 'session', 'sessionid'] },
+    { key: 'cid', label: 'cid（分组主键）', required: true, desc: '按其分组聚合',
+      aliases: ['cid', 'session_id', 'session', 'sessionid'] },
     { key: 'round_id', label: 'round_id', required: false, desc: '轮次序号，缺失按原顺序',
       aliases: ['round_id', 'roundid', 'round', '轮次'] },
-    { key: 'images', label: '图片列', required: false, multi: true, desc: '可多选：图1~10 / 洗后图1~10 / image_url',
-      prefixes: ['洗后图', '图', 'image'], aliases: ['image_url', 'imageurl', '图片链接', 'images'] }
+    { key: 'contents', label: '聚合内容列', required: true, multi: true,
+      desc: '每轮写入 JSON 的列（默认除 cid/round_id 外全部）',
+      aliases: [] }
   ];
 
-  var state = { headers: [], rows: [], mapping: null, sessions: [] };
+  var state = { headers: [], aoa: [], sheetName: 'Sheet1', mapping: null, sessions: [], targetCol: -1 };
   var el = {};
   ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'out-section',
-   'download-btn', 'preview', 'summary', 'out-cols', 'remap-btn'].forEach(function (id) {
+   'download-btn', 'preview', 'summary', 'remap-btn'].forEach(function (id) {
     el[id] = document.getElementById(id);
   });
 
@@ -29,6 +30,14 @@
     el.status.hidden = false;
     el.status.className = 'status' + (kind ? ' is-' + kind : '');
     el.status.textContent = msg;
+  }
+
+  // 默认聚合内容列 = 除 cid/round_id 外的全部非空表头
+  function defaultContents(headers, autoMap) {
+    var skip = {};
+    if (autoMap.cid) skip[autoMap.cid] = 1;
+    if (autoMap.round_id) skip[autoMap.round_id] = 1;
+    return headers.filter(function (h) { return h && !skip[h]; });
   }
 
   T.bindFileInput({
@@ -43,130 +52,149 @@
   function onFile(file) {
     el['file-name'].hidden = false;
     el['file-name'].textContent = '已选择：' + file.name;
+    state.fileName = file.name;
     setStatus('正在解析…');
-    T.parseFile(file).then(function (res) {
-      if (!res.rows.length) { setStatus('未读到数据行。', 'error'); return; }
-      state.headers = res.headers; state.rows = res.rows;
+    T.parseFileMatrix(file).then(function (res) {
+      if (!res.aoa.length) { setStatus('未读到任何行。', 'error'); return; }
+      state.aoa = res.aoa;
+      state.sheetName = res.sheetName;
+      state.headers = (res.aoa[0] || []).map(function (h) { return String(h == null ? '' : h).trim(); });
+      if (res.aoa.length < 2) { setStatus('只读到表头，没有数据行。', 'warn'); return; }
       el['remap-btn'].hidden = false;
-      setStatus('已读取 ' + res.rows.length + ' 行，' + res.headers.length + ' 列。正在识别列…');
-      Mapping.run({ fields: FIELDS, headers: res.headers, title: '数据聚合 · 列映射', onConfirm: applyMapping });
+      setStatus('已读取 ' + (res.aoa.length - 1) + ' 行，' + state.headers.filter(Boolean).length + ' 列。正在识别列…');
+      // 预填 contents 默认值
+      var autoMap = Mapping.auto(FIELDS, state.headers);
+      autoMap.contents = defaultContents(state.headers, autoMap);
+      Mapping.open({ fields: FIELDS, headers: state.headers, mapping: autoMap, title: '数据聚合 · 列映射', onConfirm: applyMapping });
     }).catch(function (e) { setStatus('解析失败：' + e.message, 'error'); });
   }
 
-  /* ---------- 工具函数（移植 py）---------- */
+  /* ---------- 工具函数 ---------- */
   function parseRound(v) {
     if (v == null || v === '') return null;
     var n = parseFloat(String(v).trim());
     return isNaN(n) ? null : Math.trunc(n);
   }
-  function getFileType(url) {
-    var u = url.toLowerCase();
-    if (u.indexOf('pdf') !== -1) return 'pdf';
-    if (u.indexOf('.doc') !== -1) return 'doc';
-    return 'image';
+  // 输出 JSON 的 key：user_prompt / user_query / 用户提问 → "user prompt"，其余保留原表头
+  function outKey(header) {
+    var n = T.normalize(header);
+    if (n === 'userprompt' || n === 'userquery' || n === '用户提问' || n === '用户问题') return 'user prompt';
+    return header;
   }
-  function extractFilename(url) {
-    try {
-      if (url.indexOf('fileName=') !== -1) return url.split('fileName=')[1].split('&')[0];
-      if (url.indexOf('/') !== -1) {
-        var fn = url.split('/').pop().split('?')[0];
-        if (fn && fn.indexOf('.') !== -1) return fn;
+
+  function colIndex(header) { return state.headers.indexOf(header); }
+
+  // 找“从左往右第一个空白列”：表头为空且该列所有数据单元格都为空；找不到则在末尾追加
+  function firstBlankCol() {
+    var width = state.headers.length;
+    for (var c = 0; c < width; c++) {
+      var headerBlank = !state.headers[c];
+      if (!headerBlank) continue;
+      var allBlank = true;
+      for (var r = 1; r < state.aoa.length; r++) {
+        if (state.aoa[r][c] != null && String(state.aoa[r][c]).trim() !== '') { allBlank = false; break; }
       }
-    } catch (e) { /* ignore */ }
-    var rnd = Math.abs((url.length * 2654435761) % 1e8).toString(36);
-    return 'image_' + rnd + '.jpg';
+      if (allBlank) return c;
+    }
+    return width; // 追加到末尾
   }
 
   function applyMapping(mapping) {
     state.mapping = mapping;
-    var pCol = mapping.prompt, sCol = mapping.session_id, rCol = mapping.round_id;
-    var imgCols = mapping.images || [];
+    var cidCol = mapping.cid, rCol = mapping.round_id;
+    var contentCols = (mapping.contents || []).filter(function (h) { return h && h !== cidCol && h !== rCol; });
+    var cidIdx = colIndex(cidCol), rIdx = rCol ? colIndex(rCol) : -1;
+    var contentIdx = contentCols.map(function (h) { return { key: outKey(h), idx: colIndex(h) }; });
 
-    // 生成带 sid 的记录（缺失 session_id 时按 round_id==1 边界自动分组）
-    var records = state.rows.map(function (row) {
-      return {
-        sid: sCol && row[sCol] != null ? String(row[sCol]).trim() : '',
-        rid: rCol ? parseRound(row[rCol]) : null,
-        prompt: row[pCol] != null ? String(row[pCol]).trim() : '',
+    // 收集每行 → 记录（保留原始行号，用于定位 session 第一行）
+    var records = [];
+    for (var r = 1; r < state.aoa.length; r++) {
+      var row = state.aoa[r];
+      records.push({
+        rowIdx: r,
+        cid: cidIdx >= 0 ? String(row[cidIdx] == null ? '' : row[cidIdx]).trim() : '',
+        rid: rIdx >= 0 ? parseRound(row[rIdx]) : null,
         row: row
-      };
-    });
-    var autoCounter = 0, curAuto = null, missing = 0;
-    records.forEach(function (r) {
-      if (r.sid) { curAuto = null; return; }
-      missing++;
-      if (curAuto === null || r.rid === 1 || r.rid == null) {
-        autoCounter++; curAuto = 'auto_session_' + autoCounter;
-      }
-      r.sid = curAuto;
-    });
+      });
+    }
 
-    // 按 sid 分组（保序）
+    // 按 cid 分组（保序）
     var order = [], groups = {};
-    records.forEach(function (r) {
-      if (!groups[r.sid]) { groups[r.sid] = []; order.push(r.sid); }
-      groups[r.sid].push(r);
+    records.forEach(function (rec) {
+      var key = rec.cid || ('__row_' + rec.rowIdx);
+      if (!groups[key]) { groups[key] = []; order.push(key); }
+      groups[key].push(rec);
     });
 
     var sessions = [];
-    order.forEach(function (sid) {
-      var grp = groups[sid].slice();
-      if (rCol) grp.sort(function (a, b) { return (a.rid == null ? 1e9 : a.rid) - (b.rid == null ? 1e9 : b.rid); });
-      var arr = grp.map(function (r) {
-        var files = [];
-        imgCols.forEach(function (c) {
-          var v = r.row[c];
-          if (v != null && String(v).trim()) {
-            var url = String(v).trim();
-            files.push({ url: url, fileName: extractFilename(url), type: getFileType(url) });
-          }
+    order.forEach(function (key) {
+      var grp = groups[key].slice();
+      if (rIdx >= 0) grp.sort(function (a, b) { return (a.rid == null ? 1e9 : a.rid) - (b.rid == null ? 1e9 : b.rid); });
+      var turns = grp.map(function (rec) {
+        var obj = {};
+        contentIdx.forEach(function (c) {
+          var v = c.idx >= 0 ? rec.row[c.idx] : '';
+          obj[c.key] = v == null ? '' : String(v);
         });
-        return { prompt: r.prompt, files: files };
+        return obj;
       });
-      sessions.push({ session_id: sid, turns: arr.length, json_data: JSON.stringify(arr) });
+      var firstRowIdx = groups[key].reduce(function (min, rec) { return rec.rowIdx < min ? rec.rowIdx : min; }, groups[key][0].rowIdx);
+      sessions.push({ cid: groups[key][0].cid || key, turns: grp.length, firstRowIdx: firstRowIdx, json_data: JSON.stringify(turns) });
     });
 
     state.sessions = sessions;
+    state.targetCol = firstBlankCol();
     el['out-section'].hidden = false;
     el['download-btn'].disabled = !sessions.length;
-    var extra = missing ? '（自动生成 ' + autoCounter + ' 个 session_id）' : '';
-    el.summary.textContent = '共 ' + sessions.length + ' 个 session' + extra;
-    setStatus('聚合完成：' + sessions.length + ' 个 session。' + extra, 'ok');
+    var colLetter = numToCol(state.targetCol + 1);
+    el.summary.textContent = '共 ' + sessions.length + ' 个 session，写入第 ' + colLetter + ' 列（session）';
+    setStatus('聚合完成：' + sessions.length + ' 个 session，将写入原表第 ' + colLetter + ' 列（表头 session），其它列不变。', 'ok');
     renderPreview();
   }
 
+  function numToCol(n) {
+    var s = '';
+    while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+    return s;
+  }
+
   function renderPreview() {
-    var cols = outCols();
+    // 预览：原表头 + session 列，仅展示前 30 数据行
+    var cols = state.headers.slice();
+    while (cols.length <= state.targetCol) cols.push('');
+    cols[state.targetCol] = 'session';
+    var sessJsonByRow = {};
+    state.sessions.forEach(function (s) { sessJsonByRow[s.firstRowIdx] = s.json_data; });
+
     var head = '<thead><tr><th class="col-idx">#</th>';
-    cols.forEach(function (c) { head += '<th>' + T.escapeHtml(c) + '</th>'; });
-    head += '<th>轮次</th></tr></thead>';
+    cols.forEach(function (c, i) { head += '<th>' + T.escapeHtml(c || numToCol(i + 1)) + '</th>'; });
+    head += '</tr></thead>';
     var body = '<tbody>';
-    state.sessions.slice(0, 50).forEach(function (s, i) {
-      body += '<tr><td class="col-idx">' + (i + 1) + '</td>';
-      cols.forEach(function (c, ci) {
-        if (ci === cols.length - 1) body += '<td class="mono"><div class="cell-clip">' + T.escapeHtml(s.json_data) + '</div></td>';
-        else body += '<td></td>';
-      });
-      body += '<td>' + s.turns + '</td></tr>';
-    });
+    var limit = Math.min(state.aoa.length, 31);
+    for (var r = 1; r < limit; r++) {
+      body += '<tr><td class="col-idx">' + r + '</td>';
+      for (var c = 0; c < cols.length; c++) {
+        var v;
+        if (c === state.targetCol) v = sessJsonByRow[r] || '';
+        else v = state.aoa[r][c] == null ? '' : state.aoa[r][c];
+        body += '<td' + (c === state.targetCol ? ' class="mono"' : '') + '><div class="cell-clip">' + T.escapeHtml(v) + '</div></td>';
+      }
+      body += '</tr>';
+    }
     body += '</tbody>';
     el.preview.innerHTML = head + body;
   }
 
-  function outCols() {
-    var cols = el['out-cols'].value.split(',').map(function (c) { return c.trim(); }).filter(Boolean);
-    return cols.length ? cols : ['L1', 'L2', 'L3', '用户问题'];
-  }
-  el['out-cols'].addEventListener('input', function () { if (state.sessions.length) renderPreview(); });
-
   function download() {
-    var cols = outCols();
-    var aoa = [cols];
+    // 复制原 aoa，补齐宽度，写入 session 列
+    var out = state.aoa.map(function (row) { return row.slice(); });
+    var width = state.targetCol + 1;
+    out.forEach(function (row) { while (row.length < width) row.push(''); });
+    out[0][state.targetCol] = 'session';
     state.sessions.forEach(function (s) {
-      var r = [];
-      for (var i = 0; i < cols.length; i++) r.push(i === cols.length - 1 ? s.json_data : '');
-      aoa.push(r);
+      if (out[s.firstRowIdx]) out[s.firstRowIdx][state.targetCol] = s.json_data;
     });
-    T.downloadBlob('aggregated_sessions.xlsx', T.aoaToXlsxBlob(aoa, 'sessions'));
+    var base = (state.fileName || 'sessions').replace(/\.(xlsx|xls|csv|json)$/i, '');
+    T.downloadBlob(base + '_with_session.xlsx', T.aoaToXlsxBlob(out, state.sheetName || 'Sheet1'));
   }
 })();

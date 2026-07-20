@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>数据聚合 · iTools</title>
 <link rel="stylesheet" href="css/styles.css" />
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/lib/papaparse.min.js"></script>
+<script src="js/lib/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="tool-page">
@@ -35,17 +35,13 @@
     </div>
 
     <div class="section" id="out-section" hidden>
-      <div class="section__title"><span class="section__step">2</span>聚合结果</div>
+      <div class="section__title"><span class="section__step">2</span>聚合结果（写回原表）</div>
       <div class="card">
-        <div class="field" style="margin-bottom:14px">
-          <label class="field__label">输出列名（逗号分隔，最后一列存放聚合 JSON）</label>
-          <input class="input" id="out-cols" value="L1,L2,L3,用户问题" />
-          <span class="field__hint">对齐脚本输出：前几列留空作为分类占位，最后一列放整段 session JSON 字符串。</span>
-        </div>
         <div class="actions">
-          <button class="btn btn--primary" id="download-btn" disabled>下载聚合 xlsx</button>
+          <button class="btn btn--primary" id="download-btn" disabled>下载写回后的 xlsx</button>
           <span class="field__hint" id="summary"></span>
         </div>
+        <span class="field__hint" style="display:block;margin-top:10px">保留上传表原样，按 cid 分组、round_id 排序，把每个 session 的多轮内容聚合成一段 JSON，写入<b>从左往右第一个空白列</b>（表头命名 <code>session</code>），其它列内容不变。</span>
       </div>
       <div class="table-scroll" style="margin-top:14px">
         <table class="data-table" id="preview"></table>

@@ -28,8 +28,8 @@
             <div class="tool-card__title">Excel 图片转 URL</div>
           </div>
         </div>
-        <div class="tool-card__desc">从 xlsx 中提取嵌在单元格里的图片，预览并打包下载；可配置上传端点把图片转为内部链接、写回表格瘦身。</div>
-        <div class="tool-card__meta">提取 / 打包 / 可配置上传 <span class="tool-card__go">打开 →</span></div>
+        <div class="tool-card__desc">上传含内嵌图片的 xlsx，填写配置信息（区分内部/公网环境、x-id/x-token/x-route-env）即可把图片转为内部链接、写回表格瘦身。</div>
+        <div class="tool-card__meta">上传文件 / 配置信息 / 写回 <span class="tool-card__go">打开 →</span></div>
       </a>
 
       <a class="tool-card glass" href="tool2.html">
@@ -40,8 +40,8 @@
             <div class="tool-card__title">数据聚合（拉题准备）</div>
           </div>
         </div>
-        <div class="tool-card__desc">按 session 把多轮 prompt/图片聚合成一行 JSON，输出 deepops 可用的 xlsx，供与模型交互拉题使用。</div>
-        <div class="tool-card__meta">xlsx / csv → 聚合 xlsx <span class="tool-card__go">打开 →</span></div>
+        <div class="tool-card__desc">保留上传表原样，按 cid 把多轮 prompt/图片聚合成一行 JSON，写入从左往右第一个空白列（session），其它列不变。</div>
+        <div class="tool-card__meta">聚合写回原表 <span class="tool-card__go">打开 →</span></div>
       </a>
 
       <a class="tool-card glass" href="tool3.html">
@@ -52,8 +52,8 @@
             <div class="tool-card__title">多轮会话渲染</div>
           </div>
         </div>
-        <div class="tool-card__desc">把拉题结果（messages 列）像素级还原成多轮对话，支持单/双模型对照，可导出 PNG 截图。</div>
-        <div class="tool-card__meta">对话可视化 / 导出 PNG <span class="tool-card__go">打开 →</span></div>
+        <div class="tool-card__desc">把拉题结果（messages 列）像素级还原成多轮对话，支持单/双模型对照，可携带 Cookie/鉴权头加载 hunyuan 内网图片，导出 PNG。</div>
+        <div class="tool-card__meta">对话可视化 / 鉴权图片 / 导出 PNG <span class="tool-card__go">打开 →</span></div>
       </a>
 
       <a class="tool-card glass" href="tool4.html">
@@ -64,7 +64,7 @@
             <div class="tool-card__title">转 tlabel jsonl</div>
           </div>
         </div>
-        <div class="tool-card__desc">按 session 聚合、取末轮，输出 tlabel 平台所需字段顺序的 jsonl，用于 DCG / GSB 任务，支持单双模型。</div>
+        <div class="tool-card__desc">按 cid 聚合、取末轮，输出 tlabel 平台所需字段（cid / user_prompt / model_x_response / model_x_url）的 jsonl，用于 DCG / GSB，支持单双模型。</div>
         <div class="tool-card__meta">xlsx → jsonl <span class="tool-card__go">打开 →</span></div>
       </a>
     </div>

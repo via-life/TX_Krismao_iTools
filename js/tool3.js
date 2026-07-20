@@ -26,10 +26,12 @@
   }
 
   var state = { headers: [], rows: [], mapping: null, sessions: [], active: -1 };
+  var imgCache = {}; // url -> { status:'ok'|'fail', objectUrl }
   var el = {};
   ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'render-section',
    'sess-list', 'sess-count', 'main-title', 'main-sub', 'render-scroll',
-   'export-one', 'export-all', 'remap-btn', 'dual-toggle', 'lightbox', 'lb-img'].forEach(function (id) {
+   'export-one', 'export-all', 'remap-btn', 'dual-toggle', 'lightbox', 'lb-img',
+   'img-fetch', 'img-cookie', 'img-headers', 'img-reload'].forEach(function (id) {
     el[id] = document.getElementById(id);
   });
 
@@ -38,6 +40,36 @@
     el.status.hidden = false;
     el.status.className = 'status' + (kind ? ' is-' + kind : '');
     el.status.textContent = msg;
+  }
+
+  /* ---------- 图片鉴权加载 ---------- */
+  function authConfig() {
+    var headers = {};
+    var raw = (el['img-headers'].value || '').trim();
+    if (raw) { try { headers = JSON.parse(raw); } catch (e) { /* 忽略非法 JSON */ } }
+    var cookie = (el['img-cookie'].value || '').trim();
+    // Cookie 头多被浏览器忽略，但内网/部分环境可用；仍附带，主要依赖 credentials:'include'
+    if (cookie) headers['Cookie'] = cookie;
+    return { headers: headers, useFetch: el['img-fetch'].checked };
+  }
+
+  // 通过 fetch 拉取图片为本地 blob url；带 credentials 以携带已登录 Cookie。返回 Promise。
+  function fetchImage(url) {
+    if (imgCache[url] && imgCache[url].status === 'ok') return Promise.resolve(imgCache[url].objectUrl);
+    var cfg = authConfig();
+    var opts = { credentials: 'include', mode: 'cors' };
+    if (Object.keys(cfg.headers).length) opts.headers = cfg.headers;
+    return fetch(url, opts).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(function (blob) {
+      var obj = URL.createObjectURL(blob);
+      imgCache[url] = { status: 'ok', objectUrl: obj };
+      return obj;
+    }).catch(function (e) {
+      imgCache[url] = { status: 'fail' };
+      throw e;
+    });
   }
 
   T.bindFileInput({ dropzone: el.dropzone, fileInput: el['file-input'], pickBtn: el['pick-btn'], onFile: onFile });
@@ -50,6 +82,14 @@
   el['export-one'].addEventListener('click', exportCurrent);
   el['export-all'].addEventListener('click', exportAll);
   el.lightbox.addEventListener('click', function () { el.lightbox.classList.remove('is-open'); el['lb-img'].src = ''; });
+  el['img-reload'].addEventListener('click', function () {
+    imgCache = {}; // 清缓存，用新 Cookie/头重拉
+    if (state.active >= 0) show(state.active);
+  });
+  el['img-fetch'].addEventListener('change', function () {
+    imgCache = {};
+    if (state.active >= 0) show(state.active);
+  });
 
   function onFile(file) {
     el['file-name'].hidden = false;
@@ -125,8 +165,9 @@
     el['main-title'].textContent = 'session: ' + s.cid;
     el['main-sub'].textContent = 'trace_id: ' + (s.trace_id || '(无)') + ' · ' + s.models.map(function (m) { return m.name + ' ' + m.rec.count + ' 轮'; }).join(' · ');
     el['render-scroll'].innerHTML = buildShot(s);
-    bindImages(el['render-scroll']);
+    el['img-reload'].hidden = false;
     el['render-scroll'].scrollTop = 0;
+    return loadImages(el['render-scroll']);
   }
 
   function buildShot(s) {
@@ -158,21 +199,39 @@
     var h = '<div class="img-gallery">';
     images.forEach(function (u) {
       var e = T.escapeHtml(u);
-      h += '<div class="img-wrap"><img class="chat-img" src="' + e + '" alt="图片" crossorigin="anonymous" data-src="' + e + '" />' +
+      h += '<div class="img-wrap"><img class="chat-img" alt="图片" data-src="' + e + '" />' +
         '<a class="img-orig-link" href="' + e + '" target="_blank" rel="noopener">查看原图</a></div>';
     });
     return h + '</div>';
   }
 
-  function bindImages(root) {
-    root.querySelectorAll('.chat-img').forEach(function (img) {
-      img.addEventListener('click', function () { el['lb-img'].src = img.getAttribute('data-src'); el.lightbox.classList.add('is-open'); });
-      img.addEventListener('error', function () {
-        var fail = document.createElement('div');
-        fail.className = 'img-fail'; fail.textContent = '[图片加载失败]';
-        if (img.parentNode) img.parentNode.replaceChild(fail, img);
+  function replaceFail(img) {
+    var fail = document.createElement('div');
+    fail.className = 'img-fail'; fail.textContent = '[图片加载失败]';
+    if (img.parentNode) img.parentNode.replaceChild(fail, img);
+  }
+
+  // 加载 root 内所有图片：勾选 fetch 时用带鉴权的 fetch→blob，否则直接 <img src>。返回全部 settled 的 Promise。
+  function loadImages(root) {
+    var cfg = authConfig();
+    var imgs = [].slice.call(root.querySelectorAll('.chat-img'));
+    return Promise.all(imgs.map(function (img) {
+      var url = img.getAttribute('data-src');
+      img.addEventListener('click', function () {
+        el['lb-img'].src = img.getAttribute('src') || url; el.lightbox.classList.add('is-open');
       });
-    });
+      function bindImg(src, tainted) {
+        return new Promise(function (res) {
+          img.onload = function () { res(); };
+          img.onerror = function () { replaceFail(img); res(); };
+          if (!tainted) img.crossOrigin = 'anonymous';
+          img.src = src;
+        });
+      }
+      if (!cfg.useFetch) return bindImg(url, false);
+      return fetchImage(url).then(function (obj) { return bindImg(obj, true); })
+        .catch(function () { return bindImg(url, true); }); // fetch 失败时回退直接加载（可显示，导出可能污染）
+    }));
   }
 
   /* ---------- markdown 渲染（移植 convert_to_png.py HTML_TEMPLATE）---------- */
@@ -267,8 +326,8 @@
 
   function exportCurrent() {
     if (state.active < 0) return;
-    setStatus('正在生成 PNG…');
-    capture().then(function (canvas) {
+    setStatus('正在加载图片并生成 PNG…');
+    loadImages(el['render-scroll']).then(capture).then(function (canvas) {
       canvas.toBlob(function (blob) {
         T.downloadBlob('session_' + safeName(state.sessions[state.active].cid) + '.png', blob);
         setStatus('已导出当前会话 PNG。', 'ok');
@@ -289,17 +348,14 @@
         });
         return;
       }
-      show(i);
       setStatus('正在批量渲染…（' + (i + 1) + '/' + state.sessions.length + '）');
-      // 等图片尝试加载后再截图
-      setTimeout(function () {
-        capture().then(function (canvas) {
-          canvas.toBlob(function (blob) {
-            zip.file((i + 1) + '_' + safeName(state.sessions[i].cid) + '.png', blob);
-            i++; step();
-          });
-        }).catch(function () { i++; step(); });
-      }, 400);
+      // show() 返回图片加载完成的 Promise，加载完再截图
+      show(i).then(capture).then(function (canvas) {
+        canvas.toBlob(function (blob) {
+          zip.file((i + 1) + '_' + safeName(state.sessions[i].cid) + '.png', blob);
+          i++; step();
+        });
+      }).catch(function () { i++; step(); });
     }
     step();
   }

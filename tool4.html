@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>转 tlabel jsonl · iTools</title>
 <link rel="stylesheet" href="css/styles.css" />
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/lib/papaparse.min.js"></script>
+<script src="js/lib/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="tool-page">
@@ -25,14 +25,14 @@
       <div class="section__title"><span class="section__step">1</span>选择模式并导入表格</div>
       <div class="card" style="margin-bottom:14px">
         <div class="switch-row">
-          <label class="field-check" style="cursor:pointer"><input type="checkbox" id="dual-toggle" /> 双模型（GSB 对照，输出 model_2_response / model_2_id）</label>
+          <label class="field-check" style="cursor:pointer"><input type="checkbox" id="dual-toggle" /> 双模型（GSB 对照，追加 model_2_response / model_2_url）</label>
         </div>
-        <span class="field__hint">单模型仅输出 trace_id / session_id / user_query / model_1_response / model_1_id；勾选后追加第二模型两列。</span>
+        <span class="field__hint">单模型输出 cid / user_prompt / model_1_response / model_1_url；勾选后追加 model_2_response / model_2_url。model_x_response 取 response_x 列，model_x_url 取 png_x 列。</span>
       </div>
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">🏷️</div>
         <div class="dropzone__title">将文件拖到此处，或点击选择</div>
-        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b>，按 session_id 聚合取末轮</div>
+        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b>，按 cid 聚合取末轮</div>
         <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
         <input id="file-input" type="file" accept=".csv,.xlsx,.xls,.json" hidden />
         <div class="dropzone__file" id="file-name" hidden></div>

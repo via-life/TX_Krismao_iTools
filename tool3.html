@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>多轮会话渲染 · iTools</title>
 <link rel="stylesheet" href="css/styles.css" />
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="js/lib/papaparse.min.js"></script>
+<script src="js/lib/xlsx.full.min.js"></script>
+<script src="js/lib/html2canvas.min.js"></script>
+<script src="js/lib/jszip.min.js"></script>
 </head>
 <body>
 <div class="tool-page">
@@ -29,6 +29,26 @@
         <label class="field-check" style="cursor:pointer"><input type="checkbox" id="dual-toggle" /> 双模型对照（左右各渲染一个 messages 列）</label>
         <span class="field__hint" style="display:block;margin-top:6px">messages 列即拉题结果里每个 session 的完整对话（OpenAI messages 数组，如 session_answer 列）。</span>
       </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <label class="field-check" style="cursor:pointer"><input type="checkbox" id="img-fetch" checked /> 通过 fetch 携带 Cookie/鉴权头加载图片（解决 hunyuan 内网图片 403）</label>
+        <div class="config-grid" id="img-auth-fields" style="margin-top:12px">
+          <div class="field">
+            <label class="field__label">Cookie</label>
+            <textarea class="textarea" id="img-cookie" placeholder="从浏览器 hunyuan.tencent.com 复制的 Cookie，例：key1=val1; key2=val2"></textarea>
+            <span class="field__hint">内网环境下携带该 Cookie 拉取图片。注：浏览器安全策略可能忽略脚本设置的 Cookie 头；最可靠方式是在<b>同一浏览器登录 hunyuan.tencent.com</b>，勾选本项后图片将自动带上已登录 Cookie（credentials:'include'）。</span>
+          </div>
+          <div class="field">
+            <label class="field__label">附加请求头（JSON，选填）</label>
+            <textarea class="textarea" id="img-headers" placeholder='{"Authorization":"Bearer ...","x-token":"..."}'></textarea>
+            <span class="field__hint">如图床用 Authorization / x-token 等鉴权，可在此填入（这些头浏览器允许设置）。</span>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button class="btn btn--ghost btn--sm" id="img-reload" hidden>用当前配置重新加载图片</button>
+        </div>
+      </div>
+
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">💬</div>
         <div class="dropzone__title">将文件拖到此处，或点击选择</div>
@@ -61,7 +81,7 @@
           </div>
         </div>
       </div>
-      <div class="status is-warn" style="margin-top:12px">提示：跨域鉴权图片（如 hunyuan 内部链接）可能因浏览器 CORS 无法计入 PNG（显示空白），此时可点「查看原图」在新标签打开。本工具不把 PNG 写回 xlsx。</div>
+      <div class="status is-warn" style="margin-top:12px">提示：hunyuan 内网图片需鉴权（403）。请勾选上方「通过 fetch 携带 Cookie/鉴权头加载图片」，并在同一浏览器登录 hunyuan 或填入 Cookie；加载成功的图片会转为本地 blob，可正常计入导出的 PNG。仍失败时可点「查看原图」在新标签打开。本工具不把 PNG 写回 xlsx。</div>
     </div>
   </div>
 </div>
