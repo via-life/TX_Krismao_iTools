@@ -2,19 +2,25 @@
    tool1.js —— Excel 图片转 URL（移植 excel2url.py 的 ZIP 方案到浏览器）
    1) JSZip 解压 xlsx，解析 drawings 锚点 → (sheet, 列, 行, media 路径)
    2) 预览每张图 + 所在单元格；打包下载
-   3) 可配置上传端点：逐图上传取回 URL，把单元格写成 URL、移除图片，
-      导出 _with_urls.xlsx（尽力实现，受 CORS 限制）
+   3) 通过仅监听 127.0.0.1 的本地服务逐图上传，取回 URL 后写回单元格、
+      移除图片并导出 _with_urls.xlsx
    ============================================================ */
 (function () {
   'use strict';
   var T = window.iTools;
   var NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 
-  var state = { zip: null, fileName: '', images: [] };
+  var state = { zip: null, fileName: '', images: [], imagesReady: false, uploading: false, generating: false, fileGeneration: 0 };
+  var service = {
+    allowed: window.location.protocol === 'http:' && window.location.hostname === '127.0.0.1',
+    checked: false,
+    failed: false,
+    environments: { test: false, prod: false }
+  };
   // images: [{sheetNum, sheetPath, drawingPath, col0, row0, cellRef, media, bytes, blob, url}]
   var el = {};
-  ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status',
-   'upload-section', 'env-hint', 'up-url', 'cfg-xid', 'cfg-xtoken', 'cfg-xroute', 'up-path',
+  ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'service-notice',
+   'upload-section', 'env-hint',
    'norm-header', 'do-upload', 'dl-mapping', 'dl-xlsx', 'up-status'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   function setStatus(node, msg, kind) {
@@ -23,25 +29,82 @@
     node.textContent = msg;
   }
 
-  function envMode() { var r = document.querySelector('input[name="env"]:checked'); return r ? r.value : 'internal'; }
+  function envMode() { var r = document.querySelector('input[name="env"]:checked'); return r ? r.value : 'test'; }
+  function envLabel(mode) { return mode === 'prod' ? '正式环境' : '测试环境'; }
+
+  function successfulCount() {
+    return state.images.filter(function (im) { return !!im.url; }).length;
+  }
+
+  function allUploaded() {
+    return state.images.length > 0 && successfulCount() === state.images.length;
+  }
+
+  function resetUploadResults(message) {
+    state.images.forEach(function (im) { im.url = ''; });
+    el['dl-mapping'].disabled = true;
+    el['dl-xlsx'].disabled = true;
+    if (message) setStatus(el['up-status'], message, 'warn');
+    else el['up-status'].hidden = true;
+    updateUploadButton();
+  }
+
+  function updateUploadButton() {
+    var ready = service.environments[envMode()] === true;
+    el['do-upload'].disabled = state.uploading || state.generating || !state.imagesReady || !service.allowed || !service.checked || !ready || allUploaded();
+    if (state.uploading) el['do-upload'].textContent = '正在上传…';
+    else if (allUploaded()) el['do-upload'].textContent = '上传已完成';
+    else if (successfulCount()) el['do-upload'].textContent = '继续上传失败项';
+    else el['do-upload'].textContent = '开始上传图片';
+  }
+
   function applyEnv() {
-    if (envMode() === 'public') {
-      el['cfg-xroute'].value = '--';
-      el['cfg-xroute'].disabled = true;
-      setStatus(el['env-hint'], '公网环境（如 GitHub Pages）：向内网元宝/COS 端点发请求通常会被 CORS 拦截，需端点对本页面放开跨域。x-route-env 已置为 --。', 'warn');
-    } else {
-      el['cfg-xroute'].disabled = false;
-      if (el['cfg-xroute'].value === '--' || !el['cfg-xroute'].value) el['cfg-xroute'].value = 'ci-613';
-      setStatus(el['env-hint'], '内部环境：请填写内网转链接端点与鉴权信息（x-id / x-token / x-route-env），可直接上传写回。', 'warn');
+    var mode = envMode();
+    if (!service.allowed) setStatus(el['env-hint'], '当前页面不能上传。请在项目目录双击“启动.bat”，并从 127.0.0.1 页面重新进入需求一。', 'warn');
+    else if (service.failed) setStatus(el['env-hint'], '本地上传服务不可用。请关闭当前静态服务器后双击“启动.bat”重试。', 'error');
+    else if (!service.checked) setStatus(el['env-hint'], '正在检测本地上传服务…');
+    else if (!service.environments[mode]) setStatus(el['env-hint'], envLabel(mode) + '配置未就绪。请检查项目目录中的 config.local.json。', 'error');
+    else setStatus(el['env-hint'], '本地上传服务已连接，' + envLabel(mode) + '配置就绪。', 'ok');
+    updateUploadButton();
+  }
+
+  function checkLocalService() {
+    if (!service.allowed) {
+      setStatus(el['service-notice'], '需求一上传仅支持本地一键服务。请在项目目录双击“启动.bat”，再从 http://127.0.0.1:8080 打开；当前在线/静态页面不会直连内网接口。', 'warn');
+      applyEnv();
+      return;
     }
+    setStatus(el['service-notice'], '正在连接本地上传服务…');
+    fetch('/api/tool1/health', { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' }).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (data) { return { response: r, data: data }; });
+    }).then(function (result) {
+      if (!result.response.ok || !result.data || result.data.ok !== true) throw new Error('健康检查失败');
+      var environments = result.data.environments || {};
+      service.environments.test = !!(environments.test && environments.test.ready);
+      service.environments.prod = !!(environments.prod && environments.prod.ready);
+      service.checked = true;
+      service.failed = false;
+      el['service-notice'].hidden = true;
+      applyEnv();
+    }).catch(function () {
+      service.checked = false;
+      service.failed = true;
+      setStatus(el['service-notice'], '未连接到需求一本地上传服务。请关闭当前静态服务器后双击“启动.bat”，不要使用 python -m http.server。', 'error');
+      applyEnv();
+    });
   }
 
   T.bindFileInput({ dropzone: el.dropzone, fileInput: el['file-input'], pickBtn: el['pick-btn'], onFile: onFile });
   el['do-upload'].addEventListener('click', doUpload);
   el['dl-mapping'].addEventListener('click', downloadMapping);
   el['dl-xlsx'].addEventListener('click', downloadRewritten);
-  [].forEach.call(document.querySelectorAll('input[name="env"]'), function (r) { r.addEventListener('change', applyEnv); });
-  applyEnv();
+  [].forEach.call(document.querySelectorAll('input[name="env"]'), function (r) {
+    r.addEventListener('change', function () {
+      resetUploadResults('已切换至' + envLabel(envMode()) + '，上一环境的上传结果已清空。');
+      applyEnv();
+    });
+  });
+  checkLocalService();
 
   /* ---------- 列号 ↔ 字母 ---------- */
   function colLetter(col1) {
@@ -64,22 +127,56 @@
   function xml(str) { return new DOMParser().parseFromString(str, 'application/xml'); }
 
   function onFile(file) {
-    if (!/\.xlsx$/i.test(file.name)) { setStatus(el.status, '仅支持 .xlsx（xls 需先另存为 xlsx）。', 'error'); return; }
+    if (state.uploading || state.generating) { setStatus(el.status, '正在处理当前文件，请等待完成后再更换文件。', 'warn'); return; }
+    var generation = ++state.fileGeneration;
+    resetUploadResults();
+    state.zip = null;
+    state.fileName = '';
+    state.images = [];
+    state.imagesReady = false;
+    el['upload-section'].hidden = true;
+    el['file-name'].hidden = true;
+    el['file-name'].textContent = '';
+    updateUploadButton();
+    if (!/\.xlsx$/i.test(file.name)) { setStatus(el.status, '仅支持 .xlsx（xls 需先另存为 xlsx）。旧文件的上传结果已清空。', 'error'); return; }
     el['file-name'].hidden = false; el['file-name'].textContent = '已选择：' + file.name;
     state.fileName = file.name;
     setStatus(el.status, '正在解压并解析图片…');
+    var selectedZip = null;
+    var selectedImages = null;
     T.readArrayBuffer(file).then(function (buf) {
+      if (generation !== state.fileGeneration) throw { staleFile: true };
       return JSZip.loadAsync(buf);
     }).then(function (zip) {
-      state.zip = zip;
+      if (generation !== state.fileGeneration) throw { staleFile: true };
+      selectedZip = zip;
       return extractImages(zip);
     }).then(function (imgs) {
-      state.images = imgs;
-      if (!imgs.length) { setStatus(el.status, '未在该 xlsx 中找到内嵌图片（图片可能是浮动/链接形式）。', 'warn'); return; }
-      setStatus(el.status, '共提取 ' + imgs.length + ' 张图片。请在下方填写配置信息后上传写回。', 'ok');
-      el['upload-section'].hidden = false;
-      return loadBlobs(imgs);
-    }).catch(function (e) { setStatus(el.status, '解析失败：' + e.message, 'error'); });
+      if (generation !== state.fileGeneration) throw { staleFile: true };
+      selectedImages = imgs;
+      return imgs.length ? loadBlobs(imgs, selectedZip) : Promise.resolve();
+    }).then(function () {
+      if (generation !== state.fileGeneration) throw { staleFile: true };
+      state.zip = selectedZip;
+      state.images = selectedImages;
+      if (selectedImages.length) {
+        el['upload-section'].hidden = false;
+        state.imagesReady = true;
+        setStatus(el.status, '共提取 ' + selectedImages.length + ' 张图片。请选择测试或正式环境后上传。', 'ok');
+      } else {
+        setStatus(el.status, '未在该 xlsx 中找到内嵌图片（图片可能是浮动/链接形式）。', 'warn');
+      }
+      updateUploadButton();
+    }).catch(function (e) {
+      if (e && e.staleFile) return;
+      if (generation !== state.fileGeneration) return;
+      state.zip = null;
+      state.images = [];
+      state.imagesReady = false;
+      el['upload-section'].hidden = true;
+      updateUploadButton();
+      setStatus(el.status, '解析失败：' + e.message, 'error');
+    });
   }
 
   /* ---------- 解析 sheet→drawing→图片锚点 ---------- */
@@ -154,74 +251,109 @@
     return out;
   }
 
-  function loadBlobs(imgs) {
+  function loadBlobs(imgs, zip) {
     return Promise.all(imgs.map(function (im) {
-      var f = state.zip.file(im.media);
+      var f = zip.file(im.media);
       if (!f) return Promise.resolve();
       return f.async('blob').then(function (blob) { im.blob = blob; });
     }));
   }
 
   /* ---------- 上传 ---------- */
-  function getByPath(obj, path) {
-    if (!path) return null;
-    return path.split('.').reduce(function (o, k) { return (o == null) ? null : o[k]; }, obj);
+  function setUploading(uploading) {
+    state.uploading = uploading;
+    el['pick-btn'].disabled = uploading;
+    el['file-input'].disabled = uploading;
+    [].forEach.call(document.querySelectorAll('input[name="env"]'), function (r) { r.disabled = uploading; });
+    updateUploadButton();
   }
 
-  function uploadOne(im, cfg) {
-    var opts = { method: 'POST', headers: {} };
-    Object.keys(cfg.headers).forEach(function (k) { opts.headers[k] = cfg.headers[k]; });
-    var fd = new FormData();
-    fd.append('file', im.blob, im.cellRef + '.' + (im.media.split('.').pop() || 'png'));
-    opts.body = fd;
-    return fetch(cfg.url, opts).then(function (r) {
-      var ct = r.headers.get('content-type') || '';
-      if (ct.indexOf('json') !== -1) return r.json().then(function (j) { return { json: j, text: '' }; });
-      return r.text().then(function (t) { return { json: null, text: t }; });
-    }).then(function (res) {
-      if (res.json) {
-        var u = cfg.path ? getByPath(res.json, cfg.path) : (res.json.resource_url || res.json.resourceUrl || res.json.url || res.json);
-        return u ? String(u) : '';
+  function setGenerating(generating) {
+    state.generating = generating;
+    el['pick-btn'].disabled = generating;
+    el['file-input'].disabled = generating;
+    el['norm-header'].disabled = generating;
+    [].forEach.call(document.querySelectorAll('input[name="env"]'), function (r) { r.disabled = generating; });
+    el['dl-mapping'].disabled = generating || !allUploaded();
+    el['dl-xlsx'].disabled = generating || !allUploaded();
+    updateUploadButton();
+  }
+
+  function uploadOne(im, mode) {
+    if (!im.blob) return Promise.reject(new Error(im.cellRef + ' 对应的图片内容读取失败。'));
+    var extension = (im.media.split('.').pop() || 'png').replace(/[^a-zA-Z0-9]/g, '') || 'png';
+    var filename = 'Sheet' + im.sheetNum + '_' + im.cellRef + '.' + extension;
+    var endpoint = '/api/tool1/upload?env=' + encodeURIComponent(mode) + '&filename=' + encodeURIComponent(filename);
+    return fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': im.blob.type || 'application/octet-stream'
+      },
+      body: im.blob
+    }).then(function (r) {
+      return r.json().catch(function () { return null; }).then(function (data) { return { response: r, data: data }; });
+    }).then(function (result) {
+      var data = result.data;
+      if (!result.response.ok || !data || data.ok !== true) {
+        var message = data && data.error && data.error.message;
+        throw new Error(message || ('本地上传服务返回 HTTP ' + result.response.status + '。'));
       }
-      return (res.text || '').trim();
+      var url = typeof data.url === 'string' ? data.url.trim() : '';
+      if (!url) throw new Error('本地上传服务未返回有效 URL。');
+      return url;
     });
   }
 
   function doUpload() {
-    var headers = {};
-    var xid = el['cfg-xid'].value.trim(); if (xid) headers['x-id'] = xid;
-    var xtoken = el['cfg-xtoken'].value.trim(); if (xtoken) headers['x-token'] = xtoken;
-    var xroute = el['cfg-xroute'].value.trim(); if (xroute) headers['x-route-env'] = xroute;
-    var cfg = { url: el['up-url'].value.trim(), path: el['up-path'].value.trim(), headers: headers };
-    if (!cfg.url) { setStatus(el['up-status'], '请先填写上传端点 URL。', 'error'); return; }
-    if (envMode() === 'internal' && !xroute) { setStatus(el['up-status'], '内部环境需填写 x-route-env（如 ci-613）。', 'error'); return; }
+    if (state.uploading) return;
+    if (!state.imagesReady || !state.images.length) { setStatus(el['up-status'], '请先选择并解析含图片的 xlsx。', 'error'); return; }
+    if (!service.allowed) { setStatus(el['up-status'], '当前页面不能上传，请双击“启动.bat”并从 127.0.0.1 页面重新进入。', 'error'); return; }
+    var mode = envMode();
+    if (!service.checked || !service.environments[mode]) { setStatus(el['up-status'], envLabel(mode) + '配置未就绪，请检查 config.local.json。', 'error'); return; }
+    if (mode === 'prod' && !window.confirm('即将把图片上传到正式环境。请确认文件和环境无误，是否继续？')) return;
 
-    var total = state.images.length, done = 0, ok = 0;
-    setStatus(el['up-status'], '开始上传… 0/' + total);
+    var total = state.images.length;
+    var ok = successfulCount();
+    var done = ok;
+    var failed = 0;
+    var lastError = '';
+    el['dl-mapping'].disabled = true;
+    el['dl-xlsx'].disabled = true;
+    setUploading(true);
+    setStatus(el['up-status'], ok ? ('继续上传未完成图片… 已保留 ' + ok + '/' + total + ' 个成功结果。') : ('开始上传… 0/' + total));
     var chain = Promise.resolve();
     state.images.forEach(function (im) {
+      if (im.url) return;
       chain = chain.then(function () {
-        return uploadOne(im, cfg).then(function (url) {
-          im.url = url || '';
-          if (url) ok++;
+        return uploadOne(im, mode).then(function (url) {
+          im.url = url;
+          ok++;
           done++;
           setStatus(el['up-status'], '上传中… ' + done + '/' + total + '（成功 ' + ok + '）');
         }).catch(function (e) {
           done++;
-          setStatus(el['up-status'], '上传中… ' + done + '/' + total + '（成功 ' + ok + '，最近错误：' + e.message + '）', 'warn');
+          failed++;
+          lastError = (e && e.message) ? e.message : '未知错误';
+          if (/Failed to fetch|NetworkError|Load failed/i.test(lastError)) lastError = '无法连接本地上传服务，请确认“启动.bat”窗口仍在运行且当前内网可用。';
+          setStatus(el['up-status'], '上传中… ' + done + '/' + total + '（成功 ' + ok + '，最近错误：' + lastError + '）', 'warn');
         });
       });
     });
     chain.then(function () {
-      var hasUrl = state.images.some(function (im) { return im.url; });
-      el['dl-mapping'].disabled = !hasUrl;
-      el['dl-xlsx'].disabled = !hasUrl;
-      if (!ok) setStatus(el['up-status'], '全部上传失败（多为 CORS/鉴权问题）。请确认端点、鉴权信息，或在内部环境使用。', 'error');
-      else setStatus(el['up-status'], '完成：成功 ' + ok + '/' + total + '。可下载映射 csv 或 _with_urls.xlsx。', 'ok');
+      setUploading(false);
+      var complete = allUploaded();
+      el['dl-mapping'].disabled = !complete;
+      el['dl-xlsx'].disabled = !complete;
+      if (complete) setStatus(el['up-status'], '全部上传完成：成功 ' + total + '/' + total + '。现在可以下载映射 CSV 或 _with_urls.xlsx。', 'ok');
+      else if (ok) setStatus(el['up-status'], '本轮完成：成功 ' + ok + '/' + total + '，失败 ' + failed + '。成功结果已保留；点击“继续上传失败项”只会重试失败图片。最近错误：' + lastError, 'warn');
+      else setStatus(el['up-status'], '全部上传失败。' + (lastError ? '最近错误：' + lastError : '请检查本地服务与内网连接。'), 'error');
     });
   }
 
   function downloadMapping() {
+    if (state.generating) return;
+    if (!allUploaded()) { setStatus(el['up-status'], '仍有图片未上传成功，暂不能生成映射文件。请先重试失败项。', 'error'); return; }
     var lines = ['sheet,cell,url'];
     state.images.forEach(function (im) {
       if (im.url) lines.push('Sheet' + im.sheetNum + ',' + im.cellRef + ',"' + im.url.replace(/"/g, '""') + '"');
@@ -295,13 +427,18 @@
   }
 
   function downloadRewritten() {
+    if (state.generating) return;
+    if (!allUploaded()) { setStatus(el['up-status'], '仍有图片未上传成功，暂不能重写 xlsx，原表中的图片不会被删除。请先重试失败项。', 'error'); return; }
+    setGenerating(true);
     setStatus(el['up-status'], '正在重写 xlsx…');
     var zip = state.zip;
+    var generation = state.fileGeneration;
+    var outputFileName = state.fileName.replace(/\.xlsx$/i, '') + '_with_urls.xlsx';
     // 按 sheetPath 分组待写单元格
     var bySheet = {};
     state.images.forEach(function (im) {
       if (!im.url) return;
-      (bySheet[im.sheetPath] = bySheet[im.sheetPath] || []).push(im);
+      (bySheet[im.sheetPath] = bySheet[im.sheetPath] || []).push({ col0: im.col0, row0: im.row0, url: String(im.url) });
     });
     var ser = new XMLSerializer();
     var normHeader = el['norm-header'].checked;
@@ -324,8 +461,13 @@
       });
       return zip.generateAsync({ type: 'blob' });
     }).then(function (blob) {
-      T.downloadBlob(state.fileName.replace(/\.xlsx$/i, '') + '_with_urls.xlsx', blob);
+      if (generation !== state.fileGeneration) throw new Error('文件已更换，已取消本次下载。');
+      T.downloadBlob(outputFileName, blob);
+      setGenerating(false);
       setStatus(el['up-status'], '已生成 _with_urls.xlsx（图片已替换为 URL）。若 Excel 打开报错，可改用映射 csv。', 'ok');
-    }).catch(function (e) { setStatus(el['up-status'], '重写失败：' + e.message, 'error'); });
+    }).catch(function (e) {
+      setGenerating(false);
+      setStatus(el['up-status'], '重写失败：' + e.message, 'error');
+    });
   }
 })();

@@ -1,12 +1,11 @@
 @echo off
 REM ============================================================
 REM  iTools local launcher
-REM  Double-click this file to start a local server and open
-REM  the tools in your default browser.
-REM  (Console text is kept in English to avoid code-page issues.)
+REM  Serves the web tools and requirement-1 upload API on the
+REM  local loopback address only.
 REM ============================================================
 cd /d "%~dp0"
-set PORT=8080
+set "PORT=8080"
 
 REM ---- locate a Python interpreter ----
 set "PY="
@@ -18,21 +17,28 @@ if not defined PY (
   exit /b 1
 )
 
+REM ---- verify dependencies without installing anything ----
+%PY% -c "import requests, qcloud_cos" >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] Required Python packages are missing.
+  echo Run this command in this folder, then start again:
+  echo   %PY% -m pip install -r requirements.txt
+  pause
+  exit /b 1
+)
+
 echo ============================================================
 echo   iTools local server
-echo   URL : http://localhost:%PORT%
+echo   URL : http://127.0.0.1:%PORT%/
 echo   The browser will open automatically.
 echo   *** Keep this black window open while using the tools. ***
 echo   *** Close this window to stop the server.              ***
 echo ============================================================
 
-REM open browser first (server starts in a moment and will answer)
-start "" "http://localhost:%PORT%/"
+%PY% local_server.py --port %PORT% --open-browser
+set "SERVER_EXIT=%ERRORLEVEL%"
 
-REM start the server (this blocks; closing the window stops it)
-%PY% -m http.server %PORT%
-
-REM if the server exits (port busy / stopped), keep the window so the message is visible
 echo.
 echo Server stopped. If it failed to start, port %PORT% may be in use.
 pause
+exit /b %SERVER_EXIT%

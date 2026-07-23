@@ -1,16 +1,18 @@
 # iTools 自动化工具集 · Web 版
 
-把 itools 平台拉题作业流水线上的四个 Python 脚本，改造成**纯静态网页工具**：图片转链接、数据聚合、多轮会话渲染、tlabel 格式转换。免构建、无后端，数据全部在浏览器本地处理，可直接部署到 GitHub Pages。
+把 itools 平台拉题作业流水线上的四个 Python 脚本改造成网页工具：图片转链接、数据聚合、多轮会话渲染、tlabel 格式转换。需求二至四仍是免构建的静态页面；需求一在浏览器本地解析 Excel，并通过只监听 `127.0.0.1` 的本地服务使用当前电脑的内网能力上传图片。
 
 ## 在线访问
 
 > 部署后地址：`https://via-life.github.io/TX_Krismao_iTools/`
 
+GitHub Pages 可直接使用需求二至四。由于浏览器对内网接口的预检会返回 `403`，需求一在在线页面只允许解析文件，上传按钮会禁用并提示双击本地的 `启动.bat`。
+
 ## 四个工具
 
 | # | 工具 | 对应脚本 | 输入 → 输出 |
 |---|------|----------|-------------|
-| 一 | **Excel 图片转 URL**（`tool1.html`） | `excel2url.py` | xlsx（内嵌图）→ 上传文件 + 输入配置信息（区分内部/公网环境），把图片转内部链接并写回 `_with_urls.xlsx` |
+| 一 | **Excel 图片转 URL**（`tool1.html`） | `excel2url.py` | xlsx（内嵌图）→ 选择测试/正式环境一键上传，把图片转内部链接并写回 `_with_urls.xlsx`（需本地启动器） |
 | 二 | **数据聚合**（`tool2.html`） | `generate_session_json.py` | xlsx/csv/json → 保留原表，按 `cid` 聚合的 JSON 写入第一个空白列（`session`） |
 | 三 | **多轮会话渲染**（`tool3.html`） | `convert_to_png.py` | xlsx（messages 列）→ 多轮对话可视化，可携带 Cookie/鉴权头加载内网图片，导出 PNG（单/双模型） |
 | 四 | **转 tlabel jsonl**（`tool4.html`） | `convert_xlsx_to_jsonl_GSB.py` | xlsx → jsonl（`cid/user_prompt/model_x_response/model_x_url`，DCG / GSB，单/双模型） |
@@ -27,12 +29,17 @@
 ## 各工具说明
 
 ### 工具一 · Excel 图片转 URL
-页面只保留两个模块：**上传文件** 与 **输入配置信息**。
-1. 上传 xlsx，浏览器本地用 JSZip 解压，按 drawing 锚点提取每张内嵌图及其所在单元格（无预览列表，仅提示提取数量）；
-2. 输入配置信息：选择**环境**（内部 / 公网）、填写上传端点 URL 与鉴权信息（`x-id / x-token / x-route-env`，对应 `excel2url.py` 的 `config.json`）、返回体中 URL 字段路径；
-3. 「开始上传并写回」逐图上传取回链接，把单元格写成 URL、移除图片，导出 `_with_urls.xlsx`，并可导出「单元格→URL 映射」csv。
+页面只保留两个模块：**上传文件**与**选择环境并上传**，不再要求用户手填 URL、鉴权头、route 或返回字段路径。
 
-> ⚠️ **公网环境**（github.io）向内网元宝/COS 端点上传通常被 **CORS** 拦截，`x-route-env` 会自动置为 `--`；请在**内部环境**使用，或让端点对本页面放开跨域。
+1. 上传 xlsx，浏览器本地用 JSZip 解压，按 drawing 锚点提取每张内嵌图及其所在单元格；
+2. 选择**测试环境**（默认）或**正式环境**。页面通过 `GET /api/tool1/health` 检查对应本地配置是否就绪，正式上传前会再次确认；
+3. 本地服务通过 `POST /api/tool1/upload?env=test|prod&filename=...` 接收单张图片 Blob，并完成元宝上传信息申请与 COS 上传；
+4. 图片按顺序逐张上传。失败后已成功 URL 会保留，再次点击只重试失败图片；切换环境或重新选择文件会清空旧 URL，避免不同环境结果混用；
+5. 只有全部图片上传成功后，才可下载「单元格→URL 映射」CSV 和 `_with_urls.xlsx`。因此不会出现部分失败却删除整表图片的情况。
+
+上传凭据只保存在本机的 `config.local.json`，该文件已被 Git 忽略；仓库仅提供不含真实值的 `config.example.json`。本地服务仅监听 `127.0.0.1`、拒绝跨域来源，健康检查也只返回测试/正式配置是否就绪，不会把凭据发送给前端。
+
+> ⚠️ GitHub Pages、`file://`、`localhost` 或其他非 `127.0.0.1` 地址不会尝试直连内网上传接口。请双击项目目录中的 `启动.bat`，并从它打开的 `http://127.0.0.1:8080` 页面进入需求一。
 
 ### 工具二 · 数据聚合
 保留上传表原样，按 `cid` 分组、`round_id` 排序，把每个 session 的多轮内容聚合成一段 JSON（`[{"user prompt","image_url","location",…}]`，即除 `cid/round_id` 外的内容列，`user_prompt` 输出为 `user prompt`），写入**从左往右第一个空白列**（表头命名 `session`，写在该 session 第一行），其它列/行内容不变，导出 `_with_session.xlsx`。
@@ -49,7 +56,8 @@
 
 ## 技术栈
 
-- 纯静态 HTML + 原生 JS（ES5 兼容），免构建
+- 前端为静态 HTML + 原生 JS（ES5 兼容），免构建；需求二至四可直接部署到 GitHub Pages
+- 需求一使用 Python 本地服务代理内网上传，依赖版本固定在 `requirements.txt`（`requests` 与腾讯云 COS SDK）
 - 依赖库已**本地化**到 `js/lib/`（离线可用，内网无需访问公网 CDN）：
   - [PapaParse](https://www.papaparse.com/) 5.4.1（CSV）
   - [SheetJS](https://sheetjs.com/) 0.18.5（XLSX 读/写）
@@ -70,6 +78,11 @@ TX_Krismao_iTools/
 ├── js/mapping.js      # 可复用「自定义列映射」组件
 ├── js/tool1.js ~ tool4.js
 ├── js/lib/            # 本地化依赖库（PapaParse / SheetJS / JSZip / html2canvas）
+├── local_server.py    # 仅监听 127.0.0.1 的静态页面与需求一上传服务
+├── requirements.txt   # 需求一本地服务依赖及固定版本
+├── config.example.json # 不含真实值的配置模板
+├── config.local.json  # 本机测试/正式凭据（已被 Git 忽略）
+├── 启动.bat            # Windows 一键启动本地服务
 ├── .nojekyll          # GitHub Pages 关闭 Jekyll
 └── README.md
 ```
@@ -78,20 +91,29 @@ TX_Krismao_iTools/
 
 **方式一：一键启动（Windows 推荐）**
 
-双击目录下的 `启动.bat`：它会自动用 Python 起本地服务并打开浏览器。**保持那个黑色命令行窗口开着**即可使用；关闭窗口即停止服务。（需已安装 Python 3。默认端口 8080，被占用时请改 `启动.bat` 里的 `PORT`。）
+双击目录下的 `启动.bat`：它会启动 `local_server.py`（仅监听 `127.0.0.1:8080`）并打开浏览器。**保持那个黑色命令行窗口开着**即可使用；关闭窗口即停止服务。
+
+启动器不会自动安装缺失依赖。若窗口提示缺少依赖，请按提示在项目目录执行：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+本机配置使用 `config.local.json`。新环境可复制 `config.example.json` 后填写测试/正式配置；不要提交、粘贴到前端或写入日志。修改配置后请重启本地服务。
 
 **方式二：手动命令**
 
 ```bash
 cd TX_Krismao_iTools
-python -m http.server 8080
-# 浏览器打开 http://localhost:8080
+python local_server.py --port 8080 --open-browser
+# 浏览器打开 http://127.0.0.1:8080
 ```
 
-> 说明：浏览器出于安全限制，网页自身无法启动本地服务，因此用 `启动.bat` 一键代劳。工具一上传、工具三加载内网图片等**网络类功能请务必通过 `http://localhost`（而非双击 `file://` 的 html）访问**，否则会被同源策略/CORS 拦截。
+> 说明：浏览器出于安全限制，网页自身无法启动本地服务，因此用 `启动.bat` 一键代劳。不要用 `python -m http.server` 运行需求一，它只能提供静态文件，没有上传 API。需求二至四仍可直接使用 GitHub Pages。
 
 ## 已知限制
 
-- **工具一上传** 向内网服务发请求受跨域（CORS）限制，公网环境多数需内网或端点放开 CORS；`x-route-env` 在公网环境自动置为 `--`。
+- **工具一上传** 仅在 `http://127.0.0.1` 本地服务页面开放，并要求当前电脑已接入对应内网；GitHub Pages、`file://`、`localhost` 与局域网地址均禁用上传。
+- **工具一凭据** 若过期或被服务端拒绝，请只更新本机 `config.local.json` 并重启。已在聊天或其他渠道出现过的凭据建议联调后轮换。
 - **工具三 PNG** 中的鉴权图片需勾选 fetch 加载并具备登录态/Cookie 才能计入截图；浏览器可能忽略脚本设置的 `Cookie` 头，且本工具不支持把截图写回 xlsx。
 - 工具一仅支持 `.xlsx`（`.xls` 请先另存为 `.xlsx`）。
