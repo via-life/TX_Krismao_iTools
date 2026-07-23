@@ -1,4 +1,4 @@
-"""Local-only static server and upload proxy for iTools requirement 1."""
+"""Local-only static server and media helpers for iTools."""
 
 from __future__ import annotations
 
@@ -42,6 +42,10 @@ REQUIRED_UPLOAD_FIELDS = (
     "location",
     "resourceUrl",
 )
+IMAGE_PROXY_HOST = "hunyuan.tencent.com"
+IMAGE_PROXY_PATH = "/api/resource/download"
+MAX_JSON_BODY_BYTES = 64 * 1024
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 class ApiError(Exception):
@@ -304,8 +308,120 @@ def upload_image(
     return str(upload_info["resourceUrl"])
 
 
+def _validate_image_proxy_url(url: str) -> str:
+    """Allow only the known Yuanbao resource endpoint; reject SSRF variants."""
+
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        parsed = None
+        port = None
+    if (
+        parsed is None
+        or parsed.scheme.lower() != "https"
+        or (parsed.hostname or "").lower() != IMAGE_PROXY_HOST
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != IMAGE_PROXY_PATH
+        or parsed.fragment
+    ):
+        raise ApiError(
+            "INVALID_IMAGE_URL",
+            "图片地址无效，仅支持元宝资源图片。",
+            HTTPStatus.BAD_REQUEST,
+        )
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    resource_ids = query.get("resourceId", [])
+    if (
+        len(resource_ids) != 1
+        or not resource_ids[0].strip()
+        or len(resource_ids[0]) > 512
+    ):
+        raise ApiError(
+            "INVALID_IMAGE_URL",
+            "图片地址缺少有效的 resourceId。",
+            HTTPStatus.BAD_REQUEST,
+        )
+    return url
+
+
+def fetch_remote_image(url: str, cookie: str = "") -> tuple[bytes, str]:
+    """Fetch one allowlisted image without exposing credentials or upstream text."""
+
+    safe_url = _validate_image_proxy_url(url.strip())
+    cookie = cookie.strip()
+    if len(cookie) > 16 * 1024 or "\r" in cookie or "\n" in cookie:
+        raise ApiError(
+            "INVALID_IMAGE_COOKIE",
+            "图片 Cookie 格式无效，请重新复制。",
+            HTTPStatus.BAD_REQUEST,
+        )
+
+    headers = {
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer": "https://hunyuan.tencent.com/",
+        "User-Agent": "Mozilla/5.0 iToolsLocal/1.0",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+
+    try:
+        response = requests.get(
+            safe_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
+        )
+    except requests.Timeout:
+        raise ApiError(
+            "IMAGE_TIMEOUT",
+            "图片读取超时，请检查内网连接后重试。",
+            HTTPStatus.GATEWAY_TIMEOUT,
+        ) from None
+    except requests.RequestException:
+        raise ApiError(
+            "IMAGE_NETWORK_ERROR",
+            "图片读取失败，请检查内网连接后重试。",
+            HTTPStatus.BAD_GATEWAY,
+        ) from None
+
+    if response.status_code in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN) or (
+        300 <= response.status_code < 400
+    ):
+        raise ApiError(
+            "IMAGE_AUTH_REQUIRED",
+            "图片需要有效登录 Cookie，请重新复制后重试。",
+            HTTPStatus.UNAUTHORIZED,
+        )
+    if response.status_code != HTTPStatus.OK:
+        raise ApiError(
+            "IMAGE_UPSTREAM_ERROR",
+            "图片服务暂时不可用，请稍后重试。",
+            HTTPStatus.BAD_GATEWAY,
+        )
+
+    image_data = response.content
+    if not image_data or len(image_data) > MAX_IMAGE_BYTES:
+        raise ApiError(
+            "INVALID_IMAGE_RESPONSE",
+            "图片内容为空或超过 25 MB 限制。",
+            HTTPStatus.BAD_GATEWAY,
+        )
+    content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0]
+    content_type = content_type.strip().lower()
+    if not content_type.startswith("image/"):
+        raise ApiError(
+            "INVALID_IMAGE_RESPONSE",
+            "图片服务返回了非图片内容，请更新登录 Cookie。",
+            HTTPStatus.BAD_GATEWAY,
+        )
+    return image_data, content_type
+
+
 class LocalRequestHandler(SimpleHTTPRequestHandler):
-    """Serve static files and expose only the requirement-1 local API."""
+    """Serve static files and expose loopback-only iTools APIs."""
 
     server_version = "iToolsLocal/1.0"
 
@@ -349,6 +465,15 @@ class LocalRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_image(self, image_data: bytes, content_type: str) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(image_data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(image_data)
 
     def _send_api_error(self, error: ApiError) -> None:
         self._send_json(
@@ -439,13 +564,75 @@ class LocalRequestHandler(SimpleHTTPRequestHandler):
             return
 
         parsed_path = urlsplit(self.path)
-        if parsed_path.path != "/api/tool1/upload":
+        if parsed_path.path not in {"/api/tool1/upload", "/api/tool3/image"}:
             self._send_api_error(
                 ApiError("NOT_FOUND", "接口不存在。", HTTPStatus.NOT_FOUND)
             )
             return
 
         try:
+            if parsed_path.path == "/api/tool3/image":
+                content_type = self.headers.get("Content-Type", "")
+                if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片代理请求必须使用 JSON。",
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                content_length = self.headers.get("Content-Length")
+                if content_length is None:
+                    raise ApiError(
+                        "LENGTH_REQUIRED",
+                        "图片代理请求缺少内容长度。",
+                        HTTPStatus.LENGTH_REQUIRED,
+                    )
+                try:
+                    length = int(content_length)
+                except ValueError:
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片代理请求的内容长度无效。",
+                        HTTPStatus.BAD_REQUEST,
+                    ) from None
+                if length <= 0 or length > MAX_JSON_BODY_BYTES:
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片代理请求内容为空或过大。",
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                raw_body = self.rfile.read(length)
+                if len(raw_body) != length:
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片代理请求接收不完整，请重试。",
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                try:
+                    request_data = json.loads(raw_body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片代理请求 JSON 无效。",
+                        HTTPStatus.BAD_REQUEST,
+                    ) from None
+                if not isinstance(request_data, Mapping):
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片代理请求 JSON 无效。",
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                url = request_data.get("url")
+                cookie = request_data.get("cookie", "")
+                if not isinstance(url, str) or not isinstance(cookie, str):
+                    raise ApiError(
+                        "INVALID_REQUEST",
+                        "图片地址或 Cookie 格式无效。",
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                image_data, image_type = fetch_remote_image(url, cookie)
+                self._send_image(image_data, image_type)
+                return
+
             query = parse_qs(parsed_path.query, keep_blank_values=True)
             if len(query.get("env", [])) != 1 or len(query.get("filename", [])) != 1:
                 raise ApiError(
@@ -539,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
 
     url = f"http://{HOST}:{server.server_port}/"
     print(f"iTools local server: {url}")
-    print("Keep this window open while using requirement 1.")
+    print("Keep this window open while using requirement 1 or 3 local features.")
     if args.open_browser:
         webbrowser.open(url)
 

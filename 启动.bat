@@ -1,8 +1,8 @@
 @echo off
 REM ============================================================
 REM  iTools local launcher
-REM  Serves the web tools and requirement-1 upload API on the
-REM  local loopback address only.
+REM  Serves the web tools plus requirement-1/3 local APIs on
+REM  the loopback address only.
 REM ============================================================
 cd /d "%~dp0"
 set "PORT=8080"

@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>多轮会话渲染 · iTools</title>
 <link rel="stylesheet" href="css/styles.css" />
+<link rel="stylesheet" href="css/tool3.css" />
 <script src="js/lib/papaparse.min.js"></script>
 <script src="js/lib/xlsx.full.min.js"></script>
 <script src="js/lib/html2canvas.min.js"></script>
 <script src="js/lib/jszip.min.js"></script>
 </head>
 <body>
-<div class="tool-page">
+<div class="tool-page tool3-page">
   <div class="aurora"></div>
   <nav class="topnav">
     <a class="topnav__back" href="index.html">← 返回</a>
@@ -30,29 +31,32 @@
         <span class="field__hint" style="display:block;margin-top:6px">messages 列即拉题结果里每个 session 的完整对话（OpenAI messages 数组，如 session_answer 列）。</span>
       </div>
 
-      <div class="card" style="margin-bottom:14px">
-        <label class="field-check" style="cursor:pointer"><input type="checkbox" id="img-fetch" checked /> 通过 fetch 携带 Cookie/鉴权头加载图片（解决 hunyuan 内网图片 403）</label>
-        <div class="config-grid" id="img-auth-fields" style="margin-top:12px">
+      <div class="card t3-output-card" style="margin-bottom:14px">
+        <div class="t3-output-row">
           <div class="field">
-            <label class="field__label">Cookie</label>
-            <textarea class="textarea" id="img-cookie" placeholder="从浏览器 hunyuan.tencent.com 复制的 Cookie，例：key1=val1; key2=val2"></textarea>
-            <span class="field__hint">内网环境下携带该 Cookie 拉取图片。注：浏览器安全策略可能忽略脚本设置的 Cookie 头；最可靠方式是在<b>同一浏览器登录 hunyuan.tencent.com</b>，勾选本项后图片将自动带上已登录 Cookie（credentials:'include'）。</span>
+            <span class="field__label">截图链接环境</span>
+            <div class="t3-envs" role="radiogroup" aria-label="截图链接环境">
+              <label class="field-check"><input type="radio" name="tool3-env" id="env-test" value="test" checked /> 测试环境</label>
+              <label class="field-check"><input type="radio" name="tool3-env" id="env-prod" value="prod" /> 正式环境（执行时二次确认）</label>
+            </div>
           </div>
-          <div class="field">
-            <label class="field__label">附加请求头（JSON，选填）</label>
-            <textarea class="textarea" id="img-headers" placeholder='{"Authorization":"Bearer ...","x-token":"..."}'></textarea>
-            <span class="field__hint">如图床用 Authorization / x-token 等鉴权，可在此填入（这些头浏览器允许设置）。</span>
+          <div class="t3-service-status" id="link-service-status">正在检查本地服务…</div>
+        </div>
+        <details class="t3-export-details">
+          <summary>图片导出增强（仅跨域图片无法进入截图时需要）</summary>
+          <div class="field t3-cookie-field">
+            <label class="field__label" for="img-cookie">hunyuan 图片 Cookie（选填）</label>
+            <textarea class="textarea" id="img-cookie" autocomplete="off" spellcheck="false" placeholder="从浏览器对应图片请求复制 Cookie；只发送给本机 127.0.0.1，不保存"></textarea>
+            <span class="field__hint">页面预览会先按参考版直接展示图片。生成截图链接时，本地服务可使用此 Cookie 把跨域图片转换为本地 Blob；Cookie 不会写入项目、Excel 或日志。</span>
           </div>
-        </div>
-        <div class="actions" style="margin-top:12px">
-          <button class="btn btn--ghost btn--sm" id="img-reload" hidden>用当前配置重新加载图片</button>
-        </div>
+          <button class="btn btn--ghost btn--sm" id="img-reload" type="button">重新加载当前会话图片</button>
+        </details>
       </div>
 
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">💬</div>
         <div class="dropzone__title">将文件拖到此处，或点击选择</div>
-        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b> / <b>.json</b></div>
+        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b> / <b>.json</b>；链接写回输入示例：<b>需求3-渲染后.xlsx</b></div>
         <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
         <input id="file-input" type="file" accept=".csv,.xlsx,.xls,.json" hidden />
         <div class="dropzone__file" id="file-name" hidden></div>
@@ -75,24 +79,37 @@
             <span class="topnav__spacer"></span>
             <button class="btn btn--ghost btn--sm" id="export-one">导出当前 PNG</button>
             <button class="btn btn--primary btn--sm" id="export-all">导出全部 (zip)</button>
+            <button class="btn btn--primary btn--sm" id="generate-links" disabled>生成链接 Excel</button>
           </div>
           <div class="render-scroll" id="render-scroll">
             <div class="empty-hint">选择左侧会话查看渲染</div>
           </div>
         </div>
       </div>
-      <div class="status is-warn" style="margin-top:12px">提示：hunyuan 内网图片需鉴权（403）。请勾选上方「通过 fetch 携带 Cookie/鉴权头加载图片」，并在同一浏览器登录 hunyuan 或填入 Cookie；加载成功的图片会转为本地 blob，可正常计入导出的 PNG。仍失败时可点「查看原图」在新标签打开。本工具不把 PNG 写回 xlsx。</div>
+      <div class="status is-warn" style="margin-top:12px">页面会优先直接展示会话图片，失败时保留“查看原图”链接。只有从 <b>127.0.0.1 本地启动器</b>进入并上传 .xlsx，才能把全部会话截图逐张上传，并在原工作簿最右侧新增 <b>png_url</b> 列后下载；原文件不会被覆盖。</div>
     </div>
   </div>
 </div>
 
-<div class="lightbox" id="lightbox"><img id="lb-img" alt="" /></div>
+<div class="t3-lbx" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="图片查看器">
+  <div class="t3-lbx__mask" data-lbx-close></div>
+  <div class="t3-lbx__toolbar">
+    <button type="button" data-lbx-action="zoom-out" title="缩小">−</button>
+    <button type="button" data-lbx-action="zoom-in" title="放大">＋</button>
+    <button type="button" data-lbx-action="rotate-left" title="向左旋转">↺</button>
+    <button type="button" data-lbx-action="rotate-right" title="向右旋转">↻</button>
+    <button type="button" data-lbx-action="reset" title="1:1 / 还原">1:1</button>
+    <button type="button" data-lbx-close title="关闭">×</button>
+  </div>
+  <div class="t3-lbx__stage" id="lb-stage"><img id="lb-img" alt="放大查看" draggable="false" /></div>
+</div>
 <div class="drop-overlay" id="drop-overlay" hidden>
   <div class="drop-overlay__inner"><div class="drop-overlay__icon">📥</div><div class="drop-overlay__text">松开导入文件</div></div>
 </div>
 
 <script src="js/common.js"></script>
 <script src="js/mapping.js"></script>
+<script src="js/tool3-data.js"></script>
 <script src="js/tool3.js"></script>
 </body>
 </html>

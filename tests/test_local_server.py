@@ -221,6 +221,82 @@ class UploadPipelineTests(unittest.TestCase):
         self.assertNotIn("dummy-test-token", caught.exception.message)
 
 
+class ImageProxyPipelineTests(unittest.TestCase):
+    image_url = (
+        "https://hunyuan.tencent.com/api/resource/download?resourceId=dummy-image"
+    )
+
+    @patch("local_server.requests.get")
+    def test_image_proxy_uses_allowlisted_url_and_optional_cookie(
+        self, get: Mock
+    ) -> None:
+        response = Mock()
+        response.status_code = 200
+        response.content = b"image-bytes"
+        response.headers = {"Content-Type": "image/jpeg; charset=binary"}
+        get.return_value = response
+
+        image_data, content_type = local_server.fetch_remote_image(
+            self.image_url, "dummy-image-cookie"
+        )
+
+        self.assertEqual(image_data, b"image-bytes")
+        self.assertEqual(content_type, "image/jpeg")
+        request = get.call_args
+        self.assertEqual(request.args[0], self.image_url)
+        self.assertEqual(request.kwargs["headers"]["Cookie"], "dummy-image-cookie")
+        self.assertEqual(request.kwargs["timeout"], local_server.REQUEST_TIMEOUT)
+        self.assertFalse(request.kwargs["allow_redirects"])
+
+    @patch("local_server.requests.get")
+    def test_image_proxy_rejects_non_allowlisted_urls_without_network(
+        self, get: Mock
+    ) -> None:
+        for url in (
+            "http://hunyuan.tencent.com/api/resource/download?resourceId=x",
+            "https://example.invalid/api/resource/download?resourceId=x",
+            "https://hunyuan.tencent.com.example.invalid/api/resource/download?resourceId=x",
+            "https://hunyuan.tencent.com:invalid/api/resource/download?resourceId=x",
+            "https://hunyuan.tencent.com/other?resourceId=x",
+            "https://hunyuan.tencent.com/api/resource/download",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaises(local_server.ApiError) as caught:
+                    local_server.fetch_remote_image(url)
+                self.assertEqual(caught.exception.code, "INVALID_IMAGE_URL")
+        get.assert_not_called()
+
+    @patch("local_server.requests.get")
+    def test_image_proxy_classifies_auth_and_redacts_upstream_content(
+        self, get: Mock
+    ) -> None:
+        response = Mock()
+        response.status_code = 303
+        response.content = b"upstream-secret-login-page"
+        response.headers = {"Content-Type": "text/html"}
+        get.return_value = response
+
+        with self.assertRaises(local_server.ApiError) as caught:
+            local_server.fetch_remote_image(self.image_url, "dummy-image-cookie")
+
+        self.assertEqual(caught.exception.code, "IMAGE_AUTH_REQUIRED")
+        self.assertNotIn("dummy-image-cookie", caught.exception.message)
+        self.assertNotIn("upstream-secret", caught.exception.message)
+
+    @patch("local_server.requests.get")
+    def test_image_proxy_rejects_non_image_response(self, get: Mock) -> None:
+        response = Mock()
+        response.status_code = 200
+        response.content = b"login page"
+        response.headers = {"Content-Type": "text/html"}
+        get.return_value = response
+
+        with self.assertRaises(local_server.ApiError) as caught:
+            local_server.fetch_remote_image(self.image_url)
+
+        self.assertEqual(caught.exception.code, "INVALID_IMAGE_RESPONSE")
+
+
 class HttpServerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_directory = tempfile.TemporaryDirectory()
@@ -324,6 +400,48 @@ class HttpServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 403)
         self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    @patch("local_server.fetch_remote_image")
+    def test_image_proxy_returns_bytes_only_to_same_origin(
+        self, fetch_remote_image: Mock
+    ) -> None:
+        fetch_remote_image.return_value = (b"png-bytes", "image/png")
+        body = json.dumps(
+            {
+                "url": "https://hunyuan.tencent.com/api/resource/download?resourceId=x",
+                "cookie": "dummy-image-cookie",
+            }
+        ).encode("utf-8")
+        status, headers, response_body = self.request(
+            "POST",
+            "/api/tool3/image",
+            body=body,
+            headers={
+                "Origin": f"http://127.0.0.1:{self.port}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(response_body, b"png-bytes")
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+        fetch_remote_image.assert_called_once_with(
+            "https://hunyuan.tencent.com/api/resource/download?resourceId=x",
+            "dummy-image-cookie",
+        )
+
+        status, _, response_body = self.request(
+            "POST",
+            "/api/tool3/image",
+            body=body,
+            headers={
+                "Origin": "https://example.invalid",
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(response_body)["error"]["code"], "FORBIDDEN")
 
     def test_wrong_host_is_rejected_for_get_and_post(self) -> None:
         wrong_host = f"localhost:{self.port}"
