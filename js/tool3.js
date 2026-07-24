@@ -19,13 +19,22 @@
     busy: false
   };
   var captureImageCache = {};
+  var imageHelper = {
+    connected: false,
+    version: '',
+    requestSequence: 0,
+    pending: {},
+    pingTimer: null
+  };
   var el = {};
 
   [
     'dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'render-section',
     'sess-list', 'sess-count', 'main-title', 'main-sub', 'render-scroll',
     'export-one', 'export-all', 'generate-png-excel', 'remap-btn', 'dual-toggle',
-    'lightbox', 'lb-img', 'lb-stage', 'img-cookie', 'img-reload'
+    'lightbox', 'lb-img', 'lb-stage', 'img-reload', 'img-helper-status',
+    'img-helper-install', 'img-helper-connected', 'img-helper-version',
+    'copy-extensions-url'
   ].forEach(function (id) {
     el[id] = document.getElementById(id);
   });
@@ -73,10 +82,6 @@
     return !!el['dual-toggle'].checked;
   }
 
-  function isLocalApp() {
-    return location.protocol === 'http:' && location.hostname === '127.0.0.1';
-  }
-
   function setStatus(message, kind) {
     el.status.hidden = false;
     el.status.className = 'status' + (kind ? ' is-' + kind : '');
@@ -114,7 +119,7 @@
     state.busy = !!on;
     [
       el['pick-btn'], el['dual-toggle'], el['remap-btn'], el['export-one'],
-      el['export-all'], el['img-reload'], el['img-cookie']
+      el['export-all'], el['img-reload']
     ].forEach(function (node) {
       if (node) node.disabled = state.busy;
     });
@@ -365,13 +370,25 @@
     root.querySelectorAll('.t3-chat-img').forEach(function (image) {
       var link = image.closest('.t3-img-item__link');
       var fallback = image.closest('.t3-img-item').querySelector('.t3-img-item__fallback');
+      var original = image.getAttribute('data-url');
+      var assisted = false;
       image.addEventListener('load', function () {
         link.hidden = false;
         fallback.hidden = true;
       });
       image.addEventListener('error', function () {
-        link.hidden = true;
-        fallback.hidden = false;
+        if (assisted) {
+          link.hidden = true;
+          fallback.hidden = false;
+          return;
+        }
+        assisted = true;
+        captureImageUrl(original).then(function (localUrl) {
+          image.src = localUrl;
+        }).catch(function () {
+          link.hidden = true;
+          fallback.hidden = false;
+        });
       });
       link.addEventListener('click', function (event) {
         if (image.naturalWidth > 0) {
@@ -379,7 +396,7 @@
           openLightbox(image.currentSrc || image.src);
         }
       });
-      image.src = image.getAttribute('data-url');
+      image.src = original;
     });
   }
 
@@ -587,11 +604,133 @@
     });
   }
 
-  function responseError(response, fallback) {
-    return response.json().catch(function () { return {}; }).then(function (data) {
-      var message = data && data.error && data.error.message;
-      throw new Error(message || data.message || fallback || ('HTTP ' + response.status));
+  function updateImageHelperStatus(stateName, version) {
+    var connected = stateName === 'connected';
+    imageHelper.connected = connected;
+    if (connected) imageHelper.version = String(version || '未知');
+    el['img-helper-status'].className = 't3-helper-status is-' + stateName;
+    el['img-helper-status'].textContent = connected ?
+      'Chrome 图片助手已连接。' :
+      (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
+        '未检测到 Chrome 图片助手，请按下方步骤安装。');
+    el['img-helper-install'].hidden = connected || stateName === 'checking';
+    el['img-helper-connected'].hidden = !connected;
+    if (connected) el['img-helper-version'].textContent = imageHelper.version;
+  }
+
+  function pingImageHelper() {
+    updateImageHelperStatus('checking');
+    window.postMessage({
+      source: 'itools-tool3-page',
+      type: 'PING'
+    }, window.location.origin);
+    clearTimeout(imageHelper.pingTimer);
+    imageHelper.pingTimer = setTimeout(function () {
+      if (!imageHelper.connected) updateImageHelperStatus('missing');
+    }, 1200);
+  }
+
+  function extractHunyuanResourceId(value) {
+    var parsed;
+    try {
+      parsed = new URL(value);
+    } catch (_) {
+      return '';
+    }
+    if (parsed.protocol !== 'https:' ||
+        parsed.hostname !== 'hunyuan.tencent.com' ||
+        parsed.pathname !== '/api/resource/download') {
+      return '';
+    }
+    var resourceId = String(parsed.searchParams.get('resourceId') || '').trim();
+    return /^[A-Za-z0-9_-]{8,160}$/.test(resourceId) ? resourceId : '';
+  }
+
+  function imageBlobFromBase64(base64, mime) {
+    var allowedMimeTypes = {
+      'image/avif': true,
+      'image/bmp': true,
+      'image/gif': true,
+      'image/jpeg': true,
+      'image/png': true,
+      'image/webp': true
+    };
+    mime = String(mime || '').toLowerCase();
+    if (!allowedMimeTypes[mime]) {
+      throw new Error('图片助手返回了无效的图片类型');
+    }
+    if (String(base64 || '').length > 42 * 1024 * 1024) {
+      throw new Error('图片助手返回的图片超过 30 MiB 限制');
+    }
+    var binary;
+    try {
+      binary = atob(String(base64 || ''));
+    } catch (_) {
+      throw new Error('图片助手返回了无效的图片内容');
+    }
+    if (!binary.length) throw new Error('图片助手返回的图片为空');
+    if (binary.length > 30 * 1024 * 1024) {
+      throw new Error('图片助手返回的图片超过 30 MiB 限制');
+    }
+    var bytes = new Uint8Array(binary.length);
+    for (var index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mime });
+  }
+
+  function imageBlobFromExtension(url) {
+    var resourceId = extractHunyuanResourceId(url);
+    if (!resourceId) {
+      return Promise.reject(new Error('图片地址不是受支持的元宝资源地址'));
+    }
+    if (!imageHelper.connected) {
+      return Promise.reject(new Error('未检测到 Chrome 图片助手，请按页面提示安装并刷新'));
+    }
+    return new Promise(function (resolve, reject) {
+      var requestId = 'tool3-' + Date.now() + '-' + (++imageHelper.requestSequence);
+      var timer = setTimeout(function () {
+        delete imageHelper.pending[requestId];
+        reject(new Error('Chrome 图片助手响应超时，请确认扩展已启用后刷新页面'));
+      }, 20000);
+      imageHelper.pending[requestId] = {
+        resolve: resolve,
+        reject: reject,
+        timer: timer
+      };
+      window.postMessage({
+        source: 'itools-tool3-page',
+        type: 'FETCH_HUNYUAN_IMAGE',
+        requestId: requestId,
+        resourceId: resourceId
+      }, window.location.origin);
     });
+  }
+
+  function onImageHelperMessage(event) {
+    var message = event.data;
+    if (event.source !== window || event.origin !== window.location.origin || !message ||
+        message.source !== 'itools-tool3-extension') return;
+    if (message.type === 'PONG') {
+      clearTimeout(imageHelper.pingTimer);
+      updateImageHelperStatus('connected', message.version);
+      return;
+    }
+    if (message.type !== 'IMAGE_RESULT' || !message.requestId) return;
+    var pending = imageHelper.pending[message.requestId];
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    delete imageHelper.pending[message.requestId];
+    if (!message.ok) {
+      var helperError = message.error || {};
+      pending.reject(new Error(helperError.message || 'Chrome 图片助手读取失败'));
+      return;
+    }
+    try {
+      pending.resolve(imageBlobFromBase64(message.base64, message.mime));
+    } catch (error) {
+      pending.reject(error);
+    }
   }
 
   function imageBlobFromBrowser(url) {
@@ -603,25 +742,11 @@
     });
   }
 
-  function imageBlobFromLocal(url) {
-    if (!isLocalApp()) throw new Error('当前不是本地页面');
-    return fetch('api/tool3/image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url, cookie: el['img-cookie'].value || '' })
-    }).then(function (response) {
-      if (!response.ok) return responseError(response, '本地图片读取失败');
-      var contentType = String(response.headers.get('content-type') || '').toLowerCase();
-      if (contentType.indexOf('image/') !== 0) throw new Error('本地服务未返回图片');
-      return response.blob();
-    });
-  }
-
   function captureImageUrl(url) {
     if (captureImageCache[url]) return captureImageCache[url].promise;
     var entry = {};
     entry.promise = imageBlobFromBrowser(url).catch(function () {
-      return imageBlobFromLocal(url);
+      return imageBlobFromExtension(url);
     }).then(function (blob) {
       if (!blob || !blob.size) throw new Error('图片内容为空');
       entry.objectUrl = URL.createObjectURL(blob);
@@ -670,7 +795,7 @@
         return setImageSource(image, localUrl);
       }).catch(function (error) {
         throw new Error('图片无法写入 PNG：' + safeErrorMessage(error, '请检查图片权限。') +
-          ' 若为鉴权图片，请从“启动.bat”进入并临时填写 Cookie。');
+          ' 若为鉴权图片，请安装并启用页面上方的 Chrome 图片助手。');
       });
     }));
   }
@@ -828,11 +953,6 @@
     });
   });
 
-  el['img-cookie'].addEventListener('change', function () {
-    revokeCaptureCache();
-    resetGeneratedPngs();
-    renderList();
-  });
   el['img-reload'].addEventListener('click', function () {
     revokeCaptureCache();
     resetGeneratedPngs();
@@ -842,9 +962,30 @@
   el['export-one'].addEventListener('click', exportCurrent);
   el['export-all'].addEventListener('click', exportAll);
   el['generate-png-excel'].addEventListener('click', generatePngWorkbook);
+  el['copy-extensions-url'].addEventListener('click', function () {
+    var value = 'chrome://extensions';
+    function copied() {
+      el['copy-extensions-url'].textContent = '已复制';
+      setTimeout(function () {
+        el['copy-extensions-url'].textContent = '复制 chrome://extensions';
+      }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(copied).catch(function () {
+        window.prompt('请复制并粘贴到 Chrome 地址栏：', value);
+      });
+    } else {
+      window.prompt('请复制并粘贴到 Chrome 地址栏：', value);
+    }
+  });
+  window.addEventListener('message', onImageHelperMessage);
+  window.addEventListener('focus', function () {
+    pingImageHelper();
+  });
 
   bindLightbox();
   updateGenerateButton();
+  pingImageHelper();
 
   window.__tool3Test = {
     messagesToRecord: messagesToRecord,

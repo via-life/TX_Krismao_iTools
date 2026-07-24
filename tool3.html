@@ -36,14 +36,26 @@
           <strong>Excel 输出方式</strong>
           <span>逐会话生成 PNG，在原工作簿最右侧新增 <b>png</b> 列并以内嵌图片写入；全程不上传云端、不生成链接。</span>
         </div>
-        <details class="t3-export-details">
-          <summary>鉴权图片读取增强（仅跨域图片无法进入截图时需要）</summary>
-          <div class="field t3-cookie-field">
-            <label class="field__label" for="img-cookie">hunyuan 图片 Cookie（选填）</label>
-            <textarea class="textarea" id="img-cookie" autocomplete="off" spellcheck="false" placeholder="从浏览器对应图片请求复制 Cookie；只发送给本机 127.0.0.1，不保存"></textarea>
-            <span class="field__hint">页面会先直接展示图片。生成 PNG 时，本地服务可使用此 Cookie 读取受保护图片；Cookie 不会写入项目、Excel 或日志。</span>
+        <details class="t3-export-details" open>
+          <summary>Chrome 图片助手（鉴权图片自动读取）</summary>
+          <div class="t3-helper-status is-checking" id="img-helper-status" role="status">
+            正在检测 Chrome 图片助手…
           </div>
-          <button class="btn btn--ghost btn--sm" id="img-reload" type="button">重新加载当前会话图片</button>
+          <div class="t3-helper-install" id="img-helper-install" hidden>
+            <p>未检测到图片助手。安装一次后，网页即可使用当前 Chrome 登录态读取鉴权图片：</p>
+            <ol>
+              <li><a class="t3-helper-download" href="downloads/itools-tool3-image-helper.zip" download>下载 Chrome 图片助手 ZIP</a>，并解压到固定文件夹。</li>
+              <li>点击下方按钮复制 <code>chrome://extensions</code>，粘贴到地址栏打开。</li>
+              <li>开启右上角“开发者模式”，点击“加载已解压的扩展程序”，选择刚才解压的文件夹。</li>
+              <li>刷新本页面，看到“已连接”后即可生成 PNG Excel。</li>
+            </ol>
+            <button class="btn btn--ghost btn--sm" id="copy-extensions-url" type="button">复制 chrome://extensions</button>
+          </div>
+          <div class="t3-helper-connected" id="img-helper-connected" hidden>
+            <strong>图片助手已连接 · v<span id="img-helper-version">—</span></strong>
+            <span>自动使用当前 Chrome 登录态，不读取/显示 Cookie。</span>
+          </div>
+          <button class="btn btn--ghost btn--sm t3-img-reload" id="img-reload" type="button">重新加载当前会话图片</button>
         </details>
       </div>
 
@@ -80,7 +92,7 @@
           </div>
         </div>
       </div>
-      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。若受鉴权图片无法进入截图，请从 <b>127.0.0.1 本地启动器</b>进入并临时填写上方 Cookie。</div>
+      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。鉴权图片会优先由浏览器直接读取，失败时自动调用上方 Chrome 图片助手。</div>
     </div>
   </div>
 </div>

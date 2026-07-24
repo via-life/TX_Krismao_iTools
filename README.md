@@ -1,12 +1,12 @@
 # iTools 自动化工具集 · Web 版
 
-把 itools 平台拉题作业流水线上的四个 Python 脚本改造成网页工具：图片转链接、数据聚合、多轮会话渲染、tlabel 格式转换。需求二、三、四均可在免构建的静态页面中完成；需求三会在浏览器本地生成 PNG，并直接嵌入原 Excel 最右侧新增的 `png` 列，不上传云端、不生成链接。需求一上传，以及需求三加载受保护图片时使用的代理接口，需通过只监听 `127.0.0.1` 的本地服务使用当前电脑的内网能力。
+把 itools 平台拉题作业流水线上的四个 Python 脚本改造成网页工具：图片转链接、数据聚合、多轮会话渲染、tlabel 格式转换。需求二、三、四均可在免构建的静态页面中完成；需求三会在浏览器本地生成 PNG，并直接嵌入原 Excel 最右侧新增的 `png` 列，不上传云端、不生成链接。受保护图片由 Chrome 图片助手复用当前浏览器登录态读取，无需启动本地脚本或手填 Cookie；需求一上传仍需通过只监听 `127.0.0.1` 的本地服务使用当前电脑的内网能力。
 
 ## 在线访问
 
 > 部署后地址：`https://via-life.github.io/TX_Krismao_iTools/`
 
-GitHub Pages 可直接使用需求二、三、四，包括需求三的对话预览、PNG 导出与 Excel 嵌图。由于浏览器对内网接口的预检会返回 `403`，需求一上传必须双击本地的 `启动.bat` 后使用；需求三仅在需要加载受鉴权保护的图片时使用本地服务。
+GitHub Pages 可直接使用需求二、三、四，包括需求三的对话预览、受保护图片读取、PNG 导出与 Excel 嵌图。需求三页面会自动检测 Chrome 图片助手；未安装时会提供 ZIP 下载和首次安装说明。由于浏览器对内网接口的预检会返回 `403`，需求一上传仍必须双击本地的 `启动.bat` 后使用。
 
 ## 四个工具
 
@@ -14,7 +14,7 @@ GitHub Pages 可直接使用需求二、三、四，包括需求三的对话预�
 |---|------|----------|-------------|
 | 一 | **Excel 图片转 URL**（`tool1.html`） | `excel2url.py` | xlsx（内嵌图）→ 选择测试/正式环境一键上传，把图片转内部链接并写回 `_with_urls.xlsx`（需本地启动器） |
 | 二 | **数据聚合**（`tool2.html`） | `generate_session_json.py` | xlsx/csv/json → 保留原表，按 `cid` 聚合的 JSON 写入第一个空白列（`session`） |
-| 三 | **多轮会话渲染**（`tool3.html`） | `convert_to_png.py` | xlsx（会话数据）→ 浏览器本地生成完整会话 PNG，嵌入原表最右侧新增的 `png` 列并输出新 xlsx；不上传云端、不生成链接 |
+| 三 | **多轮会话渲染**（`tool3.html`） | `convert_to_png.py` | xlsx（会话数据）→ Chrome 图片助手读取受保护图片，浏览器本地生成完整会话 PNG，嵌入原表最右侧新增的 `png` 列并输出新 xlsx；不上传云端、不生成链接 |
 | 四 | **转 tlabel jsonl**（`tool4.html`） | `convert_xlsx_to_jsonl_GSB.py` | xlsx → jsonl（`cid/user_prompt/model_x_response/model_x_url`，DCG / GSB，单/双模型） |
 
 ## 核心增强：自定义列映射
@@ -53,9 +53,16 @@ GitHub Pages 可直接使用需求二、三、四，包括需求三的对话预�
 2. 按会话顺序在浏览器本地生成 PNG，不向测试、正式或其他云端环境上传；
 3. 保留原工作簿内容，在最右侧新增 `png` 列并嵌入每行对应的 PNG，下载为新 xlsx；不会生成图片链接，也不会覆盖用户选择的源文件。
 
-> 🔑 **内网图片导出增强**：从 `启动.bat` 打开的本地页面可选填当前登录态的 Cookie，并通过 `POST /api/tool3/image` 临时加载受鉴权保护的图片，再参与浏览器本地截图与 Excel 嵌图。Cookie 仅用于本次本地处理，不会保存；普通公开图片的预览和导出不需要填写。
+受保护图片由 **Chrome 图片助手**读取。打开 GitHub Pages 上的需求三页面后，网页会自动检测扩展；如果尚未安装，页面会提供扩展 ZIP 下载入口。首次使用按以下步骤操作：
 
-> ⚠️ 需求三不会上传截图，也不会生成或写回图片链接。GitHub Pages 可直接完成预览、PNG/zip 导出和 Excel 嵌图；只有受保护图片需要从 `http://127.0.0.1:8080` 本地页面通过上述代理接口加载。
+1. 在需求三页面下载 [Chrome 图片助手 ZIP](downloads/itools-tool3-image-helper.zip)，并解压到一个固定目录；
+2. 打开 `chrome://extensions/`，开启右上角的「开发者模式」；
+3. 点击「加载已解压的扩展程序」，选择刚才解压后的扩展目录；
+4. 返回需求三页面并刷新。扩展检测成功后，受保护图片会自动使用当前浏览器登录态加载。
+
+Chrome 禁止普通网页静默安装扩展，因此首次使用必须手动完成上述「加载已解压的扩展程序」步骤；之后网页会自动检测，无需重复安装。扩展不申请 Cookie 读取权限，不读取、显示或保存 Cookie，只允许访问 `https://hunyuan.tencent.com/api/resource/download` 图片接口，由浏览器在请求时自动复用当前登录态。
+
+> ⚠️ 需求三不需要 `启动.bat`，也不需要手填 Cookie。它不会上传截图，也不会生成或写回图片链接；GitHub Pages 可直接完成图片加载、预览、PNG/zip 导出和 Excel 嵌图。
 
 ### 工具四 · 转 tlabel jsonl
 按 `cid` 聚合、取 `round_id` 最大（并列取靠后）那一行，严格按 tlabel 平台 KEY 顺序输出 jsonl：
@@ -64,8 +71,9 @@ GitHub Pages 可直接使用需求二、三、四，包括需求三的对话预�
 
 ## 技术栈
 
-- 前端为静态 HTML + 原生 JS（现代浏览器），免构建；需求二、三、四可直接部署到 GitHub Pages，需求三的 PNG 生成与 Excel 嵌图均在浏览器本地完成
-- Python 本地服务仅承担需求一上传，以及需求三受保护图片的 `/api/tool3/image` 代理；依赖版本固定在 `requirements.txt`（`requests` 与腾讯云 COS SDK）
+- 前端为静态 HTML + 原生 JS（现代浏览器），免构建；需求二、三、四可直接部署到 GitHub Pages，需求三通过 Chrome 图片助手读取受保护图片，PNG 生成与 Excel 嵌图均在浏览器本地完成
+- Chrome 图片助手仅允许访问固定图片接口，不申请 Cookie 读取权限；页面自动检测扩展并提供 ZIP 下载入口
+- Python 本地服务仅承担需求一上传；依赖版本固定在 `requirements.txt`（`requests` 与腾讯云 COS SDK）
 - 依赖库已**本地化**到 `js/lib/`（离线可用，内网无需访问公网 CDN）：
   - [PapaParse](https://www.papaparse.com/) 5.4.1（CSV）
   - [SheetJS](https://sheetjs.com/) 0.18.5（XLSX 读/写）
@@ -88,7 +96,9 @@ TX_Krismao_iTools/
 ├── js/tool1.js ~ tool4.js
 ├── js/tool3-data.js   # 需求三会话兼容解析与原结构 xlsx 图片嵌入
 ├── js/lib/            # 本地化依赖库（PapaParse / SheetJS / JSZip / html2canvas）
-├── local_server.py    # 仅监听 127.0.0.1 的静态页面、需求一/三本地接口
+├── chrome-extension/tool3-image-helper/ # iTools 需求三图片助手源文件
+├── downloads/itools-tool3-image-helper.zip # 网页提供的图片助手安装包
+├── local_server.py    # 仅监听 127.0.0.1 的静态页面与需求一上传接口
 ├── requirements.txt   # 本地服务依赖及固定版本
 ├── config.example.json # 不含真实值的配置模板
 ├── config.local.json  # 本机测试/正式凭据（已被 Git 忽略）
@@ -119,12 +129,13 @@ python local_server.py --port 8080 --open-browser
 # 浏览器打开 http://127.0.0.1:8080
 ```
 
-> 说明：浏览器出于安全限制，网页自身无法启动本地服务，因此用 `启动.bat` 一键代劳。不要用 `python -m http.server` 运行需求一上传或需求三受保护图片代理，它只能提供静态文件，没有对应 API。需求二、三、四的纯本地浏览器功能仍可直接使用 GitHub Pages。
+> 说明：浏览器出于安全限制，网页自身无法启动本地服务，因此需求一用 `启动.bat` 一键代劳。不要用 `python -m http.server` 运行需求一上传，它只能提供静态文件，没有对应 API。需求二、三、四可直接使用 GitHub Pages；需求三的受保护图片由 Chrome 图片助手读取。
 
 ## 已知限制
 
 - **工具一上传** 仅在 `http://127.0.0.1` 本地服务页面开放，并要求当前电脑已接入对应内网；GitHub Pages、`file://`、`localhost` 与局域网地址均禁用上传。
 - **工具一凭据** 若过期或被服务端拒绝，请只更新本机 `config.local.json` 并重启。已在聊天或其他渠道出现过的凭据建议联调后轮换。
-- **工具三图片** 会优先直接展示；如需把受鉴权图片计入导出，可在本地页面临时填写 Cookie，并通过 `/api/tool3/image` 加载，该值不会保存。
+- **工具三图片** 会优先直接展示；受鉴权图片由 Chrome 图片助手复用浏览器当前登录态读取。首次使用需下载 ZIP，并在 `chrome://extensions/` 开启开发者模式后加载已解压扩展；Chrome 不允许网页静默安装扩展。
+- **Chrome 图片助手权限** 仅限 `https://hunyuan.tencent.com/api/resource/download` 图片接口，不申请 Cookie 读取权限，不读取、显示或保存 Cookie。
 - **工具三 Excel 嵌图** 在浏览器本地生成并嵌入 PNG，不上传云端、不生成链接；输出会保留原表内容，在最右侧新增 `png` 列并下载为新文件。
 - 工具一仅支持 `.xlsx`（`.xls` 请先另存为 `.xlsx`）。

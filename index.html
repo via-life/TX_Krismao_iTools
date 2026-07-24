@@ -17,7 +17,7 @@
         <p class="brand__subtitle">拉题作业流水线 · 浏览器本地处理 · 需求一内网上传</p>
       </div>
     </div>
-    <p class="hub__desc">把 itools 平台的四个脚本搬进浏览器：图片转链接、数据聚合、多轮渲染、tlabel 格式转换。需求二、三、四均在浏览器本地处理；需求一上传，以及需求三加载受保护图片时使用的代理接口，由只监听 127.0.0.1 的本地服务提供。</p>
+    <p class="hub__desc">把 itools 平台的四个脚本搬进浏览器：图片转链接、数据聚合、多轮渲染、tlabel 格式转换。需求二、三、四均在浏览器本地处理；需求三通过 Chrome 图片助手自动复用当前浏览器登录态读取受保护图片，无需启动脚本或手填 Cookie。需求一上传仍由只监听 127.0.0.1 的本地服务提供。</p>
 
     <div class="tool-grid">
       <a class="tool-card glass" href="tool1.html">
@@ -52,8 +52,8 @@
             <div class="tool-card__title">多轮会话渲染</div>
           </div>
         </div>
-        <div class="tool-card__desc">还原单/双模型多轮对话并展示图片，在浏览器本地生成完整会话 PNG，直接嵌入原 Excel 最右侧新增的 png 列后导出；截图不上传云端，也不生成链接。受保护图片可通过本地接口临时加载。</div>
-        <div class="tool-card__meta">图片可视化 / PNG 导出 / Excel 嵌图 <span class="tool-card__go">打开 →</span></div>
+        <div class="tool-card__desc">还原单/双模型多轮对话并展示图片，在浏览器本地生成完整会话 PNG，直接嵌入原 Excel 最右侧新增的 png 列后导出；Chrome 图片助手自动使用当前登录态读取受保护图片，不上传云端，也不读取 Cookie。</div>
+        <div class="tool-card__meta">自动检测图片助手 / PNG 导出 / Excel 嵌图 <span class="tool-card__go">打开 →</span></div>
       </a>
 
       <a class="tool-card glass" href="tool4.html">
@@ -70,7 +70,7 @@
     </div>
 
     <div class="hub__footer">
-      需求二、三、四可使用 GitHub Pages · 需求一上传及需求三受保护图片加载请双击“启动.bat”
+      需求二、三、四可使用 GitHub Pages · 需求三页面自动提供 Chrome 图片助手 ZIP · 仅需求一上传需双击“启动.bat”
     </div>
   </div>
 </div>

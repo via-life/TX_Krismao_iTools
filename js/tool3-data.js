@@ -27,6 +27,48 @@
     return output;
   }
 
+  function escapeJsonControlCharacters(value) {
+    var text = String(value || '');
+    var output = '';
+    var inString = false;
+    var escaped = false;
+    for (var i = 0; i < text.length; i++) {
+      var character = text.charAt(i);
+      var code = text.charCodeAt(i);
+      if (!inString) {
+        output += character;
+        if (character === '"') inString = true;
+        continue;
+      }
+      if (escaped) {
+        output += character;
+        escaped = false;
+        continue;
+      }
+      if (character === '\\') {
+        output += character;
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        output += character;
+        inString = false;
+        continue;
+      }
+      if (code < 0x20) {
+        if (character === '\b') output += '\\b';
+        else if (character === '\t') output += '\\t';
+        else if (character === '\n') output += '\\n';
+        else if (character === '\f') output += '\\f';
+        else if (character === '\r') output += '\\r';
+        else output += '\\u' + ('000' + code.toString(16)).slice(-4);
+        continue;
+      }
+      output += character;
+    }
+    return output;
+  }
+
   function parseLooseJson(value) {
     var parsed = value;
     for (var i = 0; i < 3 && typeof parsed === 'string'; i++) {
@@ -36,7 +78,11 @@
       try {
         parsed = JSON.parse(text);
       } catch (error) {
-        return parsed;
+        try {
+          parsed = JSON.parse(escapeJsonControlCharacters(text));
+        } catch (sanitizedError) {
+          return parsed;
+        }
       }
     }
     return parsed;
