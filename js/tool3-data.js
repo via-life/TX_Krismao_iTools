@@ -1,9 +1,18 @@
-/* Demand 3 data helpers: conversation normalization and in-place XLSX URL appending. */
+/* Demand 3 data helpers: conversation normalization and in-place XLSX PNG embedding. */
 (function (global) {
   'use strict';
 
   var REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
   var MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  var XDR_NS = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
+  var DRAWING_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+  var PACKAGE_REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  var CONTENT_TYPES_NS = 'http://schemas.openxmlformats.org/package/2006/content-types';
+  var DRAWING_REL_TYPE = REL_NS + '/drawing';
+  var IMAGE_REL_TYPE = REL_NS + '/image';
+  var EMU_PER_PIXEL = 9525;
+  var MAX_IMAGE_WIDTH_PX = 900;
+  var MAX_IMAGE_HEIGHT_PX = 1400;
 
   function uniq(values) {
     var seen = Object.create(null);
@@ -331,19 +340,48 @@
     return pieces.concat(['_rels', filename + '.rels']).join('/');
   }
 
-  function normalizeRowUrlPairs(rowUrlPairs) {
-    if (!Array.isArray(rowUrlPairs)) throw new Error('rowUrlPairs 必须是数组');
-    var byRow = Object.create(null);
-    rowUrlPairs.forEach(function (pair) {
-      var row = Number(pair && pair.row);
-      var url = pair && pair.url != null ? String(pair.url).trim() : '';
+  function toUint8Array(value) {
+    if (value instanceof Uint8Array) return Promise.resolve(value);
+    if (value instanceof ArrayBuffer) return Promise.resolve(new Uint8Array(value));
+    if (ArrayBuffer.isView(value)) {
+      return Promise.resolve(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    }
+    if (value && typeof value.arrayBuffer === 'function') {
+      return value.arrayBuffer().then(function (buffer) { return new Uint8Array(buffer); });
+    }
+    return Promise.reject(new Error('PNG 必须使用 Blob、ArrayBuffer 或 Uint8Array'));
+  }
+
+  function readPngDimensions(bytes) {
+    var signature = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (bytes.length < 24 || !signature.every(function (value, index) { return bytes[index] === value; })) {
+      throw new Error('图片不是有效的 PNG');
+    }
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var width = view.getUint32(16, false);
+    var height = view.getUint32(20, false);
+    if (!width || !height) throw new Error('PNG 尺寸无效');
+    return { width: width, height: height };
+  }
+
+  async function normalizeRowPngPairs(rowPngPairs) {
+    if (!Array.isArray(rowPngPairs)) throw new Error('rowPngPairs 必须是数组');
+    if (!rowPngPairs.length) throw new Error('没有可写入的 PNG');
+    var rows = Object.create(null);
+    var output = [];
+    for (var i = 0; i < rowPngPairs.length; i++) {
+      var pair = rowPngPairs[i] || {};
+      var row = Number(pair.row);
       if (!Number.isInteger(row) || row < 2) throw new Error('Excel 行号必须是大于 1 的整数');
-      if (!/^https?:\/\//i.test(url)) throw new Error('png_url 必须是 http/https 链接');
-      byRow[row] = url;
-    });
-    return Object.keys(byRow).map(function (row) {
-      return { row: Number(row), url: byRow[row] };
-    }).sort(function (a, b) { return a.row - b.row; });
+      if (rows[row]) throw new Error('同一 Excel 行不能写入多张 PNG');
+      rows[row] = true;
+      var source = pair.blob != null ? pair.blob : pair.bytes;
+      var bytes = await toUint8Array(source);
+      var dimensions = readPngDimensions(bytes);
+      output.push({ row: row, bytes: bytes, width: dimensions.width, height: dimensions.height });
+    }
+    output.sort(function (a, b) { return a.row - b.row; });
+    return output;
   }
 
   function createInlineStringCell(documentNode, reference, value) {
@@ -483,16 +521,309 @@
     }, 0);
     var column = tableDocument.createElementNS(table.namespaceURI || MAIN_NS, 'tableColumn');
     column.setAttribute('id', String(maxId + 1));
-    column.setAttribute('name', 'png_url');
+    column.setAttribute('name', 'png');
     tableColumns.appendChild(column);
     tableColumns.setAttribute('count', String(columns.length + 1));
   }
 
-  async function appendUrlsToWorkbook(arrayBuffer, rowUrlPairs) {
-    if (!global.JSZip) throw new Error('缺少 JSZip，无法生成链接 Excel');
-    var pairs = normalizeRowUrlPairs(rowUrlPairs);
-    if (!pairs.length) throw new Error('没有可写入的 png_url');
+  function directChild(root, localName) {
+    for (var node = root.firstChild; node; node = node.nextSibling) {
+      if (node.nodeType === 1 && (node.localName || node.nodeName.split(':').pop()) === localName) return node;
+    }
+    return null;
+  }
 
+  function inheritLeftStyle(row, cell, targetColumn) {
+    var cells = getElements(row, 'c');
+    for (var i = 0; i < cells.length; i++) {
+      var parsed = parseCellReference(cells[i].getAttribute('r'));
+      if (parsed && parsed.column === targetColumn - 1 && cells[i].hasAttribute('s')) {
+        cell.setAttribute('s', cells[i].getAttribute('s'));
+        break;
+      }
+    }
+    return cell;
+  }
+
+  function createBlankCell(documentNode, reference) {
+    var cell = documentNode.createElementNS(MAIN_NS, 'c');
+    cell.setAttribute('r', reference);
+    return cell;
+  }
+
+  function setImageRowHeight(row, png) {
+    var scale = Math.min(1, MAX_IMAGE_WIDTH_PX / png.width, MAX_IMAGE_HEIGHT_PX / png.height);
+    png.displayWidth = Math.max(1, Math.floor(png.width * scale));
+    png.displayHeight = Math.max(1, Math.floor(png.height * scale));
+    row.setAttribute('ht', String(png.displayHeight * 0.75));
+    row.setAttribute('customHeight', 'true');
+  }
+
+  function setImageColumnWidth(sheetDocument, targetColumn, displayWidth) {
+    var root = sheetDocument.documentElement;
+    var cols = directChild(root, 'cols');
+    if (!cols) {
+      cols = sheetDocument.createElementNS(MAIN_NS, 'cols');
+      var sheetData = directChild(root, 'sheetData');
+      root.insertBefore(cols, sheetData || null);
+    }
+    var definitions = getElements(cols, 'col');
+    var target = null;
+    for (var i = 0; i < definitions.length; i++) {
+      var min = Number(definitions[i].getAttribute('min'));
+      var max = Number(definitions[i].getAttribute('max'));
+      if (min <= targetColumn && targetColumn <= max) {
+        target = definitions[i];
+        if (min < targetColumn) {
+          var before = target.cloneNode(false);
+          before.setAttribute('max', String(targetColumn - 1));
+          cols.insertBefore(before, target);
+        }
+        if (targetColumn < max) {
+          var after = target.cloneNode(false);
+          after.setAttribute('min', String(targetColumn + 1));
+          cols.insertBefore(after, target.nextSibling);
+        }
+        target.setAttribute('min', String(targetColumn));
+        target.setAttribute('max', String(targetColumn));
+        break;
+      }
+    }
+    if (!target) {
+      target = sheetDocument.createElementNS(MAIN_NS, 'col');
+      target.setAttribute('min', String(targetColumn));
+      target.setAttribute('max', String(targetColumn));
+      var inserted = false;
+      definitions = getElements(cols, 'col');
+      for (var j = 0; j < definitions.length; j++) {
+        if (Number(definitions[j].getAttribute('min')) > targetColumn) {
+          cols.insertBefore(target, definitions[j]);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) cols.appendChild(target);
+    }
+    var columnWidth = Math.floor((displayWidth / 7) * 1000) / 1000;
+    target.setAttribute('width', String(columnWidth));
+    target.setAttribute('customWidth', 'true');
+  }
+
+  function nextRelationshipId(relsDocument) {
+    var used = Object.create(null);
+    getElements(relsDocument, 'Relationship').forEach(function (relationship) {
+      used[relationship.getAttribute('Id')] = true;
+    });
+    var number = 1;
+    while (used['rId' + number]) number++;
+    return 'rId' + number;
+  }
+
+  function findRelationship(relsDocument, relationshipId) {
+    var relationships = getElements(relsDocument, 'Relationship');
+    for (var i = 0; i < relationships.length; i++) {
+      if (relationships[i].getAttribute('Id') === relationshipId) return relationships[i];
+    }
+    return null;
+  }
+
+  function relativePartTarget(fromPart, toPart) {
+    var from = fromPart.split('/').slice(0, -1);
+    var to = toPart.split('/');
+    while (from.length && to.length && from[0] === to[0]) {
+      from.shift();
+      to.shift();
+    }
+    return from.map(function () { return '..'; }).concat(to).join('/');
+  }
+
+  function createRelationshipsDocument(label) {
+    return parseXml('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="' + PACKAGE_REL_NS + '"></Relationships>', label);
+  }
+
+  function nextDrawingPath(zip) {
+    var number = 1;
+    while (zip.files['xl/drawings/drawing' + number + '.xml']) number++;
+    return 'xl/drawings/drawing' + number + '.xml';
+  }
+
+  function createDrawingDocument(label) {
+    return parseXml('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<xdr:wsDr xmlns:xdr="' + XDR_NS + '" xmlns:a="' + DRAWING_NS + '" xmlns:r="' + REL_NS + '"></xdr:wsDr>', label);
+  }
+
+  function insertDrawingElement(sheetDocument, drawingElement) {
+    var root = sheetDocument.documentElement;
+    var namesAfterDrawing = {
+      legacyDrawing: true, legacyDrawingHF: true, picture: true, oleObjects: true,
+      controls: true, webPublishItems: true, tableParts: true, extLst: true
+    };
+    for (var node = root.firstChild; node; node = node.nextSibling) {
+      var localName = node.nodeType === 1 ? (node.localName || node.nodeName.split(':').pop()) : '';
+      if (namesAfterDrawing[localName]) {
+        root.insertBefore(drawingElement, node);
+        return;
+      }
+    }
+    root.appendChild(drawingElement);
+  }
+
+  async function ensureDrawingParts(zip, sheetDocument, sheetPath) {
+    var sheetRelsPath = relationshipFilePath(sheetPath);
+    var sheetRelsFile = zip.file(sheetRelsPath);
+    var sheetRelsDocument = sheetRelsFile
+      ? parseXml(await sheetRelsFile.async('string'), sheetRelsPath)
+      : createRelationshipsDocument(sheetRelsPath);
+    var drawingElement = directChild(sheetDocument.documentElement, 'drawing');
+    var drawingRelationship = null;
+    var drawingPath = null;
+    if (drawingElement) {
+      var existingId = drawingElement.getAttributeNS(REL_NS, 'id') || drawingElement.getAttribute('r:id');
+      drawingRelationship = findRelationship(sheetRelsDocument, existingId);
+      if (drawingRelationship) drawingPath = normalizeZipPath(sheetPath, drawingRelationship.getAttribute('Target'));
+    }
+    if (!drawingPath || !zip.file(drawingPath)) {
+      drawingPath = nextDrawingPath(zip);
+      if (!drawingRelationship) {
+        drawingRelationship = sheetRelsDocument.createElementNS(PACKAGE_REL_NS, 'Relationship');
+        drawingRelationship.setAttribute('Id', nextRelationshipId(sheetRelsDocument));
+        sheetRelsDocument.documentElement.appendChild(drawingRelationship);
+      }
+      drawingRelationship.setAttribute('Type', DRAWING_REL_TYPE);
+      drawingRelationship.setAttribute('Target', relativePartTarget(sheetPath, drawingPath));
+      if (!drawingElement) {
+        drawingElement = sheetDocument.createElementNS(MAIN_NS, 'drawing');
+        insertDrawingElement(sheetDocument, drawingElement);
+      }
+      drawingElement.setAttributeNS(REL_NS, 'r:id', drawingRelationship.getAttribute('Id'));
+    }
+    var drawingFile = zip.file(drawingPath);
+    var drawingDocument = drawingFile
+      ? parseXml(await drawingFile.async('string'), drawingPath)
+      : createDrawingDocument(drawingPath);
+    var drawingRelsPath = relationshipFilePath(drawingPath);
+    var drawingRelsFile = zip.file(drawingRelsPath);
+    var drawingRelsDocument = drawingRelsFile
+      ? parseXml(await drawingRelsFile.async('string'), drawingRelsPath)
+      : createRelationshipsDocument(drawingRelsPath);
+    return {
+      sheetRelsPath: sheetRelsPath,
+      sheetRelsDocument: sheetRelsDocument,
+      drawingPath: drawingPath,
+      drawingDocument: drawingDocument,
+      drawingRelsPath: drawingRelsPath,
+      drawingRelsDocument: drawingRelsDocument
+    };
+  }
+
+  function nextMediaPath(zip, drawingPath) {
+    var directory = drawingPath.split('/').slice(0, -1).concat('media').join('/');
+    var number = 1;
+    while (zip.files[directory + '/image' + number + '.png']) number++;
+    return directory + '/image' + number + '.png';
+  }
+
+  function nextPictureId(drawingDocument) {
+    return getElements(drawingDocument, 'cNvPr').reduce(function (maximum, element) {
+      return Math.max(maximum, Number(element.getAttribute('id')) || 0);
+    }, 0) + 1;
+  }
+
+  function appendTextElement(documentNode, parent, namespace, qualifiedName, text) {
+    var element = documentNode.createElementNS(namespace, qualifiedName);
+    element.textContent = String(text);
+    parent.appendChild(element);
+    return element;
+  }
+
+  function appendPictureAnchor(drawingDocument, column, png, relationshipId, pictureId) {
+    var anchor = drawingDocument.createElementNS(XDR_NS, 'xdr:oneCellAnchor');
+    var from = drawingDocument.createElementNS(XDR_NS, 'xdr:from');
+    appendTextElement(drawingDocument, from, XDR_NS, 'xdr:col', column - 1);
+    appendTextElement(drawingDocument, from, XDR_NS, 'xdr:colOff', 0);
+    appendTextElement(drawingDocument, from, XDR_NS, 'xdr:row', png.row - 1);
+    appendTextElement(drawingDocument, from, XDR_NS, 'xdr:rowOff', 0);
+    anchor.appendChild(from);
+
+    var extent = drawingDocument.createElementNS(XDR_NS, 'xdr:ext');
+    extent.setAttribute('cx', String(png.displayWidth * EMU_PER_PIXEL));
+    extent.setAttribute('cy', String(png.displayHeight * EMU_PER_PIXEL));
+    anchor.appendChild(extent);
+
+    var picture = drawingDocument.createElementNS(XDR_NS, 'xdr:pic');
+    var nonVisual = drawingDocument.createElementNS(XDR_NS, 'xdr:nvPicPr');
+    var properties = drawingDocument.createElementNS(XDR_NS, 'xdr:cNvPr');
+    properties.setAttribute('id', String(pictureId));
+    properties.setAttribute('name', 'Image ' + pictureId);
+    properties.setAttribute('descr', 'Picture');
+    nonVisual.appendChild(properties);
+    nonVisual.appendChild(drawingDocument.createElementNS(XDR_NS, 'xdr:cNvPicPr'));
+    picture.appendChild(nonVisual);
+
+    var blipFill = drawingDocument.createElementNS(XDR_NS, 'xdr:blipFill');
+    var blip = drawingDocument.createElementNS(DRAWING_NS, 'a:blip');
+    blip.setAttributeNS(REL_NS, 'r:embed', relationshipId);
+    blip.setAttribute('cstate', 'print');
+    blipFill.appendChild(blip);
+    var stretch = drawingDocument.createElementNS(DRAWING_NS, 'a:stretch');
+    stretch.appendChild(drawingDocument.createElementNS(DRAWING_NS, 'a:fillRect'));
+    blipFill.appendChild(stretch);
+    picture.appendChild(blipFill);
+
+    var shapeProperties = drawingDocument.createElementNS(XDR_NS, 'xdr:spPr');
+    var geometry = drawingDocument.createElementNS(DRAWING_NS, 'a:prstGeom');
+    geometry.setAttribute('prst', 'rect');
+    shapeProperties.appendChild(geometry);
+    picture.appendChild(shapeProperties);
+    anchor.appendChild(picture);
+    anchor.appendChild(drawingDocument.createElementNS(XDR_NS, 'xdr:clientData'));
+    drawingDocument.documentElement.appendChild(anchor);
+  }
+
+  function appendImageRelationship(drawingRelsDocument, target) {
+    var relationship = drawingRelsDocument.createElementNS(PACKAGE_REL_NS, 'Relationship');
+    var relationshipId = nextRelationshipId(drawingRelsDocument);
+    relationship.setAttribute('Id', relationshipId);
+    relationship.setAttribute('Type', IMAGE_REL_TYPE);
+    relationship.setAttribute('Target', target);
+    drawingRelsDocument.documentElement.appendChild(relationship);
+    return relationshipId;
+  }
+
+  async function ensureContentTypes(zip, drawingPath) {
+    var path = '[Content_Types].xml';
+    var file = zip.file(path);
+    if (!file) throw new Error('工作簿缺少 [Content_Types].xml');
+    var documentNode = parseXml(await file.async('string'), path);
+    var defaults = getElements(documentNode, 'Default');
+    var pngDefault = defaults.filter(function (element) {
+      return String(element.getAttribute('Extension')).toLowerCase() === 'png';
+    })[0];
+    if (!pngDefault) {
+      pngDefault = documentNode.createElementNS(CONTENT_TYPES_NS, 'Default');
+      pngDefault.setAttribute('Extension', 'png');
+      var firstOverride = getElements(documentNode, 'Override')[0];
+      documentNode.documentElement.insertBefore(pngDefault, firstOverride || null);
+    }
+    pngDefault.setAttribute('ContentType', 'image/png');
+
+    var partName = '/' + drawingPath;
+    var drawingOverride = getElements(documentNode, 'Override').filter(function (element) {
+      return element.getAttribute('PartName') === partName;
+    })[0];
+    if (!drawingOverride) {
+      drawingOverride = documentNode.createElementNS(CONTENT_TYPES_NS, 'Override');
+      drawingOverride.setAttribute('PartName', partName);
+      documentNode.documentElement.appendChild(drawingOverride);
+    }
+    drawingOverride.setAttribute('ContentType', 'application/vnd.openxmlformats-officedocument.drawing+xml');
+    zip.file(path, serializeXml(documentNode));
+  }
+
+  async function appendPngsToWorkbook(arrayBuffer, rowPngPairs) {
+    if (!global.JSZip) throw new Error('缺少 JSZip，无法生成内嵌图片 Excel');
+    var pairs = await normalizeRowPngPairs(rowPngPairs);
     var zip = await global.JSZip.loadAsync(arrayBuffer);
     var workbookPath = 'xl/workbook.xml';
     var workbookRelsPath = 'xl/_rels/workbook.xml.rels';
@@ -513,7 +844,7 @@
     var sheetData = getElements(sheetDocument, 'sheetData')[0];
     if (!sheetData) throw new Error('第一个工作表缺少 sheetData');
     var bounds = findSheetBounds(sheetDocument);
-    if (bounds.maxColumn >= 16384) throw new Error('工作表已达到 Excel 最大列数，无法新增 png_url');
+    if (bounds.maxColumn >= 16384) throw new Error('工作表已达到 Excel 最大列数，无法新增 png');
     var newColumn = bounds.maxColumn + 1;
     var newColumnName = columnNumberToName(newColumn);
     var maxWrittenRow = pairs.reduce(function (maximum, pair) {
@@ -522,31 +853,47 @@
     var newMaxRow = Math.max(bounds.maxRow, maxWrittenRow);
 
     var headerRow = findOrCreateRow(sheetDocument, sheetData, 1);
-    appendCell(headerRow, createInlineStringCell(sheetDocument, newColumnName + '1', 'png_url'), newColumn);
+    var headerCell = createInlineStringCell(sheetDocument, newColumnName + '1', 'png');
+    appendCell(headerRow, inheritLeftStyle(headerRow, headerCell, newColumn), newColumn);
     pairs.forEach(function (pair) {
       var row = findOrCreateRow(sheetDocument, sheetData, pair.row);
-      appendCell(row, createInlineStringCell(sheetDocument, newColumnName + pair.row, pair.url), newColumn);
+      var cell = createBlankCell(sheetDocument, newColumnName + pair.row);
+      appendCell(row, inheritLeftStyle(row, cell, newColumn), newColumn);
+      setImageRowHeight(row, pair);
     });
+    var maxDisplayWidth = pairs.reduce(function (maximum, pair) {
+      return Math.max(maximum, pair.displayWidth);
+    }, 1);
+    setImageColumnWidth(sheetDocument, newColumn, maxDisplayWidth);
     updateSheetRanges(sheetDocument, bounds, newColumn, newMaxRow);
 
-    var sheetRelsPath = relationshipFilePath(sheetPath);
-    var sheetRelsFile = zip.file(sheetRelsPath);
-    if (sheetRelsFile) {
-      var sheetRelsDocument = parseXml(await sheetRelsFile.async('string'), sheetRelsPath);
-      var tableParts = getElements(sheetDocument, 'tablePart');
-      for (var i = 0; i < tableParts.length; i++) {
-        var tableRelationshipId = tableParts[i].getAttributeNS(REL_NS, 'id') ||
-          tableParts[i].getAttribute('r:id');
-        var tablePath = relationshipTarget(sheetRelsDocument, tableRelationshipId, sheetPath);
-        var tableFile = tablePath && zip.file(tablePath);
-        if (!tableFile) continue;
-        var tableDocument = parseXml(await tableFile.async('string'), tablePath);
-        updateTableDocument(tableDocument, bounds.maxColumn, newColumn, newMaxRow);
-        zip.file(tablePath, serializeXml(tableDocument));
-      }
+    var drawingParts = await ensureDrawingParts(zip, sheetDocument, sheetPath);
+    var pictureId = nextPictureId(drawingParts.drawingDocument);
+    pairs.forEach(function (pair) {
+      var mediaPath = nextMediaPath(zip, drawingParts.drawingPath);
+      var target = relativePartTarget(drawingParts.drawingPath, mediaPath);
+      var relationshipId = appendImageRelationship(drawingParts.drawingRelsDocument, target);
+      zip.file(mediaPath, pair.bytes);
+      appendPictureAnchor(drawingParts.drawingDocument, newColumn, pair, relationshipId, pictureId++);
+    });
+
+    var tableParts = getElements(sheetDocument, 'tablePart');
+    for (var i = 0; i < tableParts.length; i++) {
+      var tableRelationshipId = tableParts[i].getAttributeNS(REL_NS, 'id') ||
+        tableParts[i].getAttribute('r:id');
+      var tablePath = relationshipTarget(drawingParts.sheetRelsDocument, tableRelationshipId, sheetPath);
+      var tableFile = tablePath && zip.file(tablePath);
+      if (!tableFile) continue;
+      var tableDocument = parseXml(await tableFile.async('string'), tablePath);
+      updateTableDocument(tableDocument, bounds.maxColumn, newColumn, newMaxRow);
+      zip.file(tablePath, serializeXml(tableDocument));
     }
 
+    await ensureContentTypes(zip, drawingParts.drawingPath);
     zip.file(sheetPath, serializeXml(sheetDocument));
+    zip.file(drawingParts.sheetRelsPath, serializeXml(drawingParts.sheetRelsDocument));
+    zip.file(drawingParts.drawingPath, serializeXml(drawingParts.drawingDocument));
+    zip.file(drawingParts.drawingRelsPath, serializeXml(drawingParts.drawingRelsDocument));
     var output = await zip.generateAsync({
       type: 'blob',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -557,13 +904,8 @@
   }
 
   global.Tool3Data = {
-    parseLooseJson: parseLooseJson,
     parseConversation: parseConversation,
     isSafeImageUrl: isSafeImageUrl,
-    collectImages: function (value) { return uniq(collectImages(value)); },
-    appendUrlsToWorkbook: appendUrlsToWorkbook,
-    columnNumberToName: columnNumberToName,
-    columnNameToNumber: columnNameToNumber,
-    xmlEscape: xmlEscape
+    appendPngsToWorkbook: appendPngsToWorkbook
   };
 })(window);

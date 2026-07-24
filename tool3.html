@@ -32,22 +32,16 @@
       </div>
 
       <div class="card t3-output-card" style="margin-bottom:14px">
-        <div class="t3-output-row">
-          <div class="field">
-            <span class="field__label">截图链接环境</span>
-            <div class="t3-envs" role="radiogroup" aria-label="截图链接环境">
-              <label class="field-check"><input type="radio" name="tool3-env" id="env-test" value="test" checked /> 测试环境</label>
-              <label class="field-check"><input type="radio" name="tool3-env" id="env-prod" value="prod" /> 正式环境（执行时二次确认）</label>
-            </div>
-          </div>
-          <div class="t3-service-status" id="link-service-status">正在检查本地服务…</div>
+        <div class="t3-output-summary">
+          <strong>Excel 输出方式</strong>
+          <span>逐会话生成 PNG，在原工作簿最右侧新增 <b>png</b> 列并以内嵌图片写入；全程不上传云端、不生成链接。</span>
         </div>
         <details class="t3-export-details">
-          <summary>图片导出增强（仅跨域图片无法进入截图时需要）</summary>
+          <summary>鉴权图片读取增强（仅跨域图片无法进入截图时需要）</summary>
           <div class="field t3-cookie-field">
             <label class="field__label" for="img-cookie">hunyuan 图片 Cookie（选填）</label>
             <textarea class="textarea" id="img-cookie" autocomplete="off" spellcheck="false" placeholder="从浏览器对应图片请求复制 Cookie；只发送给本机 127.0.0.1，不保存"></textarea>
-            <span class="field__hint">页面预览会先按参考版直接展示图片。生成截图链接时，本地服务可使用此 Cookie 把跨域图片转换为本地 Blob；Cookie 不会写入项目、Excel 或日志。</span>
+            <span class="field__hint">页面会先直接展示图片。生成 PNG 时，本地服务可使用此 Cookie 读取受保护图片；Cookie 不会写入项目、Excel 或日志。</span>
           </div>
           <button class="btn btn--ghost btn--sm" id="img-reload" type="button">重新加载当前会话图片</button>
         </details>
@@ -56,7 +50,7 @@
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">💬</div>
         <div class="dropzone__title">将文件拖到此处，或点击选择</div>
-        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b> / <b>.json</b>；链接写回输入示例：<b>需求3-渲染后.xlsx</b></div>
+        <div class="dropzone__desc">支持 <b>.xlsx</b> / <b>.xls</b> / <b>.csv</b> / <b>.json</b>；内嵌写回输入示例：<b>需求3-渲染前.xlsx</b></div>
         <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
         <input id="file-input" type="file" accept=".csv,.xlsx,.xls,.json" hidden />
         <div class="dropzone__file" id="file-name" hidden></div>
@@ -79,14 +73,14 @@
             <span class="topnav__spacer"></span>
             <button class="btn btn--ghost btn--sm" id="export-one">导出当前 PNG</button>
             <button class="btn btn--primary btn--sm" id="export-all">导出全部 (zip)</button>
-            <button class="btn btn--primary btn--sm" id="generate-links" disabled>生成链接 Excel</button>
+            <button class="btn btn--primary btn--sm" id="generate-png-excel" disabled>生成内嵌 PNG Excel</button>
           </div>
           <div class="render-scroll" id="render-scroll">
             <div class="empty-hint">选择左侧会话查看渲染</div>
           </div>
         </div>
       </div>
-      <div class="status is-warn" style="margin-top:12px">页面会优先直接展示会话图片，失败时保留“查看原图”链接。只有从 <b>127.0.0.1 本地启动器</b>进入并上传 .xlsx，才能把全部会话截图逐张上传，并在原工作簿最右侧新增 <b>png_url</b> 列后下载；原文件不会被覆盖。</div>
+      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。若受鉴权图片无法进入截图，请从 <b>127.0.0.1 本地启动器</b>进入并临时填写上方 Cookie。</div>
     </div>
   </div>
 </div>

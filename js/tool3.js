@@ -1,5 +1,5 @@
 /* ============================================================
-   tool3.js —— 多轮会话渲染、图片预览、截图上传与 Excel 链接写回
+   tool3.js —— 多轮会话渲染、图片预览与 PNG 内嵌 Excel
    ============================================================ */
 (function () {
   'use strict';
@@ -15,8 +15,7 @@
     active: -1,
     file: null,
     fileBuffer: null,
-    screenshotUrls: [],
-    service: { test: false, prod: false },
+    screenshotPngs: [],
     busy: false
   };
   var captureImageCache = {};
@@ -25,9 +24,8 @@
   [
     'dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'render-section',
     'sess-list', 'sess-count', 'main-title', 'main-sub', 'render-scroll',
-    'export-one', 'export-all', 'generate-links', 'remap-btn', 'dual-toggle',
-    'lightbox', 'lb-img', 'lb-stage', 'img-cookie', 'img-reload',
-    'link-service-status', 'env-test', 'env-prod'
+    'export-one', 'export-all', 'generate-png-excel', 'remap-btn', 'dual-toggle',
+    'lightbox', 'lb-img', 'lb-stage', 'img-cookie', 'img-reload'
   ].forEach(function (id) {
     el[id] = document.getElementById(id);
   });
@@ -75,10 +73,6 @@
     return !!el['dual-toggle'].checked;
   }
 
-  function currentEnv() {
-    return el['env-prod'].checked ? 'prod' : 'test';
-  }
-
   function isLocalApp() {
     return location.protocol === 'http:' && location.hostname === '127.0.0.1';
   }
@@ -100,7 +94,7 @@
 
   function outputFilename() {
     var name = state.file ? state.file.name : 'sessions.xlsx';
-    return name.replace(/\.xlsx$/i, '') + '_with_png_urls.xlsx';
+    return name.replace(/\.xlsx$/i, '') + '_with_png.xlsx';
   }
 
   function revokeCaptureCache() {
@@ -111,8 +105,8 @@
     captureImageCache = {};
   }
 
-  function resetGeneratedLinks() {
-    state.screenshotUrls = state.sessions.map(function () { return ''; });
+  function resetGeneratedPngs() {
+    state.screenshotPngs = state.sessions.map(function () { return null; });
     updateGenerateButton();
   }
 
@@ -120,8 +114,7 @@
     state.busy = !!on;
     [
       el['pick-btn'], el['dual-toggle'], el['remap-btn'], el['export-one'],
-      el['export-all'], el['img-reload'], el['img-cookie'],
-      el['env-test'], el['env-prod']
+      el['export-all'], el['img-reload'], el['img-cookie']
     ].forEach(function (node) {
       if (node) node.disabled = state.busy;
     });
@@ -129,49 +122,9 @@
   }
 
   function updateGenerateButton() {
-    var ready = isLocalApp() && state.service[currentEnv()];
     var isXlsx = state.file && /\.xlsx$/i.test(state.file.name);
-    el['generate-links'].disabled = state.busy || !ready || !isXlsx || !state.sessions.length;
-  }
-
-  function updateServiceStatus() {
-    var box = el['link-service-status'];
-    var envLabel = currentEnv() === 'prod' ? '正式' : '测试';
-    if (!isLocalApp()) {
-      box.className = 't3-service-status is-warn';
-      box.textContent = '当前是静态网页：可预览和导出 PNG；生成链接 Excel 请双击“启动.bat”后进入。';
-      updateGenerateButton();
-      return;
-    }
-    if (state.service[currentEnv()]) {
-      box.className = 't3-service-status is-ok';
-      box.textContent = '本地服务已连接，' + envLabel + '环境配置就绪。';
-    } else {
-      box.className = 't3-service-status is-warn';
-      box.textContent = '本地服务已连接，但' + envLabel + '环境配置未就绪，请检查 config.local.json。';
-    }
-    updateGenerateButton();
-  }
-
-  function checkHealth() {
-    if (!isLocalApp()) {
-      updateServiceStatus();
-      return Promise.resolve();
-    }
-    return fetch('api/tool1/health', { cache: 'no-store' }).then(function (response) {
-      if (!response.ok) throw new Error('health');
-      return response.json();
-    }).then(function (data) {
-      state.service.test = !!(data.environments && data.environments.test && data.environments.test.ready);
-      state.service.prod = !!(data.environments && data.environments.prod && data.environments.prod.ready);
-      updateServiceStatus();
-    }).catch(function () {
-      state.service.test = false;
-      state.service.prod = false;
-      el['link-service-status'].className = 't3-service-status is-warn';
-      el['link-service-status'].textContent = '未连接本地服务，请关闭页面后重新双击“启动.bat”。';
-      updateGenerateButton();
-    });
+    el['generate-png-excel'].disabled =
+      state.busy || !isXlsx || !state.sessions.length;
   }
 
   function parseSpreadsheet(buffer) {
@@ -219,7 +172,7 @@
     state.mapping = null;
     state.sessions = [];
     state.active = -1;
-    state.screenshotUrls = [];
+    state.screenshotPngs = [];
     el['render-section'].hidden = true;
     el['file-name'].hidden = false;
     el['file-name'].textContent = '已选择：' + file.name;
@@ -304,12 +257,12 @@
         models: models
       };
     });
-    resetGeneratedLinks();
+    resetGeneratedPngs();
     el['render-section'].hidden = false;
     el['sess-count'].textContent = '会话（' + state.sessions.length + '）';
     setStatus(
       '已加载 ' + state.sessions.length + ' 个会话。' +
-      (/\.xlsx$/i.test(state.file.name) ? '' : ' 当前格式仅支持预览/PNG 导出；链接写回请使用 .xlsx。'),
+      (/\.xlsx$/i.test(state.file.name) ? '' : ' 当前格式仅支持预览/PNG 导出；内嵌 PNG 请使用 .xlsx。'),
       'ok'
     );
     renderList();
@@ -321,14 +274,14 @@
     state.sessions.forEach(function (session, index) {
       var invalid = session.models.every(function (model) { return model.rec.empty; });
       var turns = session.models.map(function (model) { return model.rec.count; }).join('/');
-      var uploaded = !!state.screenshotUrls[index];
+      var generated = !!state.screenshotPngs[index];
       html += '<button type="button" class="sess-item' +
-        (invalid ? ' is-bad' : '') + (uploaded ? ' is-done' : '') +
+        (invalid ? ' is-bad' : '') + (generated ? ' is-done' : '') +
         '" data-index="' + index + '">' +
         '<span class="sess-item__id">' + T.escapeHtml(session.cid) + '</span>' +
         '<span class="sess-item__meta">' +
         (invalid ? '无有效对话' : turns + ' 轮') +
-        (uploaded ? ' · 已生成链接' : '') +
+        (generated ? ' · 已生成 PNG' : '') +
         (session.trace_id ? ' · ' + T.escapeHtml(session.trace_id.slice(0, 12)) : '') +
         '</span></button>';
     });
@@ -716,7 +669,8 @@
         item.querySelector('.t3-img-item__fallback').hidden = true;
         return setImageSource(image, localUrl);
       }).catch(function (error) {
-        throw new Error('图片无法写入截图：' + safeErrorMessage(error, '请检查图片权限或填写 Cookie。'));
+        throw new Error('图片无法写入 PNG：' + safeErrorMessage(error, '请检查图片权限。') +
+          ' 若为鉴权图片，请从“启动.bat”进入并临时填写 Cookie。');
       });
     }));
   }
@@ -798,58 +752,34 @@
     });
   }
 
-  function uploadScreenshot(blob, index, environment) {
-    var filename = 'tool3_' + String(index + 1).padStart(4, '0') + '_' +
-      safeName(state.sessions[index].cid) + '.png';
-    var url = 'api/tool1/upload?env=' + encodeURIComponent(environment) +
-      '&filename=' + encodeURIComponent(filename);
-    return fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'image/png' },
-      body: blob
-    }).then(function (response) {
-      if (!response.ok) return responseError(response, '截图上传失败');
-      return response.json();
-    }).then(function (data) {
-      if (!data.ok || !D.isSafeImageUrl(data.url)) throw new Error('上传接口未返回有效图片链接');
-      return data.url;
-    });
-  }
-
-  function downloadLinkedWorkbook() {
+  function downloadPngWorkbook() {
     var pairs = state.sessions.map(function (session, index) {
-      return { row: session.sourceRow, url: state.screenshotUrls[index] };
+      return { row: session.sourceRow, blob: state.screenshotPngs[index] };
     });
-    return D.appendUrlsToWorkbook(state.fileBuffer, pairs).then(function (blob) {
+    return D.appendPngsToWorkbook(state.fileBuffer, pairs).then(function (blob) {
       T.downloadBlob(outputFilename(), blob);
     });
   }
 
-  function generateLinkedWorkbook() {
-    if (state.busy || el['generate-links'].disabled) return;
-    var environment = currentEnv();
-    if (environment === 'prod' && !window.confirm(
-      '即将把 ' + state.sessions.length + ' 张会话截图上传到正式环境。确认继续吗？'
-    )) return;
+  function generatePngWorkbook() {
+    if (state.busy || el['generate-png-excel'].disabled) return;
     var originalActive = state.active;
     var cursor = 0;
     setBusy(true);
 
     function step() {
-      while (cursor < state.sessions.length && state.screenshotUrls[cursor]) cursor++;
+      while (cursor < state.sessions.length && state.screenshotPngs[cursor]) cursor++;
       if (cursor >= state.sessions.length) {
-        setStatus('全部截图已上传，正在保留原工作簿结构并写入 png_url…');
-        return downloadLinkedWorkbook().then(function () {
+        setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 png 列…');
+        return downloadPngWorkbook().then(function () {
           setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。', 'ok');
         });
       }
       var current = cursor;
-      var completed = state.screenshotUrls.filter(Boolean).length;
-      setStatus('正在生成并上传截图…（' + (completed + 1) + '/' + state.sessions.length + '）');
+      var completed = state.screenshotPngs.filter(Boolean).length;
+      setStatus('正在生成会话 PNG…（' + (completed + 1) + '/' + state.sessions.length + '）');
       return captureSession(current).then(canvasToBlob).then(function (blob) {
-        return uploadScreenshot(blob, current, environment);
-      }).then(function (url) {
-        state.screenshotUrls[current] = url;
+        state.screenshotPngs[current] = blob;
         renderList();
         cursor++;
         return step();
@@ -857,10 +787,12 @@
     }
 
     step().catch(function (error) {
-      var completed = state.screenshotUrls.filter(Boolean).length;
-      setStatus('处理在第 ' + (cursor + 1) + ' 个会话停止：' +
-        safeErrorMessage(error, '生成或上传失败。') + '；已保留 ' + completed +
-        ' 个成功链接，再次点击会自动跳过。', 'error');
+      var completed = state.screenshotPngs.filter(Boolean).length;
+      var stage = cursor < state.sessions.length ?
+        '第 ' + (cursor + 1) + ' 个会话生成阶段' : 'Excel 写入阶段';
+      setStatus('处理在' + stage + '停止：' +
+        safeErrorMessage(error, 'PNG 生成或写入失败。') + '；已保留 ' + completed +
+        ' 张成功 PNG，再次点击会自动跳过。', 'error');
     }).then(function () {
       if (originalActive >= 0 && originalActive < state.sessions.length) show(originalActive);
       setBusy(false);
@@ -886,7 +818,7 @@
   });
 
   el['dual-toggle'].addEventListener('change', function () {
-    resetGeneratedLinks();
+    resetGeneratedPngs();
     if (!state.rows.length) return;
     Mapping.run({
       fields: buildFields(dual()),
@@ -896,29 +828,22 @@
     });
   });
 
-  [el['env-test'], el['env-prod']].forEach(function (radio) {
-    radio.addEventListener('change', function () {
-      resetGeneratedLinks();
-      updateServiceStatus();
-      renderList();
-    });
-  });
-
   el['img-cookie'].addEventListener('change', function () {
     revokeCaptureCache();
-    resetGeneratedLinks();
+    resetGeneratedPngs();
     renderList();
   });
   el['img-reload'].addEventListener('click', function () {
     revokeCaptureCache();
+    resetGeneratedPngs();
+    renderList();
     if (state.active >= 0) show(state.active);
   });
   el['export-one'].addEventListener('click', exportCurrent);
   el['export-all'].addEventListener('click', exportAll);
-  el['generate-links'].addEventListener('click', generateLinkedWorkbook);
+  el['generate-png-excel'].addEventListener('click', generatePngWorkbook);
 
   bindLightbox();
-  checkHealth();
   updateGenerateButton();
 
   window.__tool3Test = {

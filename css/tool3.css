@@ -3,6 +3,22 @@
   gap: 14px;
 }
 
+.tool3-page .t3-output-summary {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(24, 144, 255, 0.08);
+  color: var(--beacon-text-1);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.tool3-page .t3-output-summary strong {
+  color: var(--beacon-title);
+  font-size: 13px;
+}
+
 .tool3-page .sess-item {
   display: block;
   width: 100%;
@@ -22,40 +38,6 @@
 .tool3-page .sess-item.is-done .sess-item__id::after {
   content: "  ✓";
   color: var(--yb-green);
-}
-
-.tool3-page .t3-output-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-
-.tool3-page .t3-envs {
-  display: flex;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-
-.tool3-page .t3-service-status {
-  max-width: 520px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: #f1f3f7;
-  color: var(--beacon-text-1);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.tool3-page .t3-service-status.is-ok {
-  background: rgba(24, 144, 255, 0.1);
-  color: #0b67b2;
-}
-
-.tool3-page .t3-service-status.is-warn {
-  background: rgba(250, 173, 20, 0.12);
-  color: #8a5a00;
 }
 
 .tool3-page .t3-export-details {
@@ -191,15 +173,6 @@ body.t3-lbx-open {
 }
 
 @media (max-width: 720px) {
-  .tool3-page .t3-output-row {
-    align-items: stretch;
-  }
-
-  .tool3-page .t3-service-status {
-    max-width: none;
-    width: 100%;
-  }
-
   .tool3-page .t3-chat-img {
     max-width: 220px;
     max-height: 220px;
