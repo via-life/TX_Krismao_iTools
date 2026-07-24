@@ -26,6 +26,8 @@
     pending: {},
     pingTimer: null
   };
+  var DIRECT_IMAGE_TIMEOUT_MS = 8000;
+  var IMAGE_HELPER_TIMEOUT_MS = 35000;
   var el = {};
 
   [
@@ -361,9 +363,23 @@
         '<img class="t3-chat-img" data-url="' + escaped + '" alt="会话图片" referrerpolicy="no-referrer" />' +
         '</a>' +
         '<a class="t3-img-item__fallback" href="' + escaped +
-        '" target="_blank" rel="noopener noreferrer" hidden>图片加载失败，查看原图</a>' +
+        '" target="_blank" rel="noopener noreferrer" hidden>' +
+        '<span aria-hidden="true">🔗</span>' + escaped + '</a>' +
         '</figure>';
     }).join('') + '</div>';
+  }
+
+  function showImageFallback(image, error) {
+    var item = image.closest('.t3-img-item');
+    if (!item) return;
+    var link = item.querySelector('.t3-img-item__link');
+    var fallback = item.querySelector('.t3-img-item__fallback');
+    if (link) link.hidden = true;
+    if (fallback) {
+      fallback.hidden = false;
+      var code = error && error.code ? String(error.code) : '';
+      if (code) fallback.setAttribute('data-error-code', code);
+    }
   }
 
   function bindPreviewImages(root) {
@@ -375,19 +391,18 @@
       image.addEventListener('load', function () {
         link.hidden = false;
         fallback.hidden = true;
+        fallback.removeAttribute('data-error-code');
       });
       image.addEventListener('error', function () {
         if (assisted) {
-          link.hidden = true;
-          fallback.hidden = false;
+          showImageFallback(image);
           return;
         }
         assisted = true;
         captureImageUrl(original).then(function (localUrl) {
           image.src = localUrl;
-        }).catch(function () {
-          link.hidden = true;
-          fallback.hidden = false;
+        }).catch(function (error) {
+          showImageFallback(image, error);
         });
       });
       link.addEventListener('click', function (event) {
@@ -682,17 +697,23 @@
   function imageBlobFromExtension(url) {
     var resourceId = extractHunyuanResourceId(url);
     if (!resourceId) {
-      return Promise.reject(new Error('图片地址不是受支持的元宝资源地址'));
+      var unsupportedError = new Error('图片地址不是受支持的元宝资源地址');
+      unsupportedError.code = 'UNSUPPORTED_IMAGE_URL';
+      return Promise.reject(unsupportedError);
     }
     if (!imageHelper.connected) {
-      return Promise.reject(new Error('未检测到 Chrome 图片助手，请按页面提示安装并刷新'));
+      var missingError = new Error('未检测到 Chrome 图片助手，请按页面提示安装并刷新');
+      missingError.code = 'EXTENSION_MISSING';
+      return Promise.reject(missingError);
     }
     return new Promise(function (resolve, reject) {
       var requestId = 'tool3-' + Date.now() + '-' + (++imageHelper.requestSequence);
       var timer = setTimeout(function () {
         delete imageHelper.pending[requestId];
-        reject(new Error('Chrome 图片助手响应超时，请确认扩展已启用后刷新页面'));
-      }, 20000);
+        var timeoutError = new Error('Chrome 图片助手响应超时，请确认扩展已启用后刷新页面');
+        timeoutError.code = 'EXTENSION_TIMEOUT';
+        reject(timeoutError);
+      }, IMAGE_HELPER_TIMEOUT_MS);
       imageHelper.pending[requestId] = {
         resolve: resolve,
         reject: reject,
@@ -723,7 +744,9 @@
     delete imageHelper.pending[message.requestId];
     if (!message.ok) {
       var helperError = message.error || {};
-      pending.reject(new Error(helperError.message || 'Chrome 图片助手读取失败'));
+      var failure = new Error(helperError.message || 'Chrome 图片助手读取失败');
+      failure.code = String(helperError.code || 'EXTENSION_ERROR');
+      pending.reject(failure);
       return;
     }
     try {
@@ -734,11 +757,20 @@
   }
 
   function imageBlobFromBrowser(url) {
-    return fetch(url, { credentials: 'include' }).then(function (response) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () {
+      controller.abort();
+    }, DIRECT_IMAGE_TIMEOUT_MS);
+    return fetch(url, {
+      credentials: 'include',
+      signal: controller.signal
+    }).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status);
       var contentType = String(response.headers.get('content-type') || '').toLowerCase();
       if (contentType.indexOf('image/') !== 0) throw new Error('响应不是图片');
       return response.blob();
+    }).finally(function () {
+      clearTimeout(timer);
     });
   }
 
@@ -794,8 +826,8 @@
         item.querySelector('.t3-img-item__fallback').hidden = true;
         return setImageSource(image, localUrl);
       }).catch(function (error) {
-        throw new Error('图片无法写入 PNG：' + safeErrorMessage(error, '请检查图片权限。') +
-          ' 若为鉴权图片，请安装并启用页面上方的 Chrome 图片助手。');
+        showImageFallback(image, error);
+        return false;
       });
     }));
   }
@@ -990,6 +1022,8 @@
   window.__tool3Test = {
     messagesToRecord: messagesToRecord,
     parseSpreadsheet: parseSpreadsheet,
-    outputFilename: outputFilename
+    outputFilename: outputFilename,
+    imageGallery: imageGallery,
+    prepareCaptureImages: prepareCaptureImages
   };
 })();

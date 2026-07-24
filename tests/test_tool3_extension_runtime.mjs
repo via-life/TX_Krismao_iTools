@@ -234,6 +234,14 @@ const imageUnauthorized = await send(
 );
 assert.equal(imageUnauthorized.result.error.code, "IMAGE_AUTH_REQUIRED");
 
+tool3Runtime.state.fetchImpl = async () => imageResponse({ status: 404, ok: false });
+const imageNotFound = await send(
+  tool3Runtime,
+  { type: "FETCH_HUNYUAN_IMAGE", resourceId: "valid_id_123" },
+  tool3Sender,
+);
+assert.equal(imageNotFound.result.error.code, "IMAGE_NOT_FOUND");
+
 tool3Runtime.state.fetchImpl = async () =>
   imageResponse({ url: "https://example.invalid/image.png" });
 const redirectedImage = await send(

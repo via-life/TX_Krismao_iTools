@@ -152,7 +152,14 @@ async function fetchHunyuanImage(resourceId) {
   if (response.status === 401 || response.status === 403) {
     return errorResult(
       "IMAGE_AUTH_REQUIRED",
-      "图片需要有效的元宝登录状态，请登录后重试。",
+      "当前 Chrome 登录态无权读取该图片，请打开原链接确认登录或资源权限。",
+    );
+  }
+
+  if (response.status === 404 || response.status === 410) {
+    return errorResult(
+      "IMAGE_NOT_FOUND",
+      "图片链接可能已失效，请打开原链接确认。",
     );
   }
 
