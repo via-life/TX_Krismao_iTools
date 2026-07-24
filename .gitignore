@@ -1,3 +1,4 @@
 /config.local.json
+/downloads/private/
 __pycache__/
 *.py[cod]

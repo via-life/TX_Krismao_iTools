@@ -1,10 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "iTools 需求三图片助手",
-  "version": "1.0.0",
-  "description": "使用当前 Chrome 登录态读取元宝资源图片，供 iTools 需求三在浏览器中生成内嵌 PNG 的 Excel。",
+  "name": "iTools 浏览器助手",
+  "version": "2.0.0",
+  "description": "为 iTools 需求一提供内网上传，并使用当前 Chrome 登录态读取需求三受保护图片。",
   "host_permissions": [
-    "https://hunyuan.tencent.com/*"
+    "https://hunyuan.tencent.com/*",
+    "https://yuanbao.test.hunyuan.woa.com/*",
+    "https://yuanbao.tencent.com/*",
+    "https://*.cos-internal.ap-guangzhou.tencentcos.cn/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -12,6 +15,7 @@
   "content_scripts": [
     {
       "matches": [
+        "https://via-life.github.io/TX_Krismao_iTools/tool1.html*",
         "https://via-life.github.io/TX_Krismao_iTools/tool3.html*"
       ],
       "js": [

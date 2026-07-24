@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Excel 图片转 URL · iTools</title>
 <link rel="stylesheet" href="css/styles.css" />
+<link rel="stylesheet" href="css/tool1.css" />
 <script src="js/lib/jszip.min.js"></script>
 </head>
 <body>
-<div class="tool-page">
+<div class="tool-page tool1-page">
   <div class="aurora"></div>
   <nav class="topnav">
     <a class="topnav__back" href="index.html">← 返回</a>
@@ -21,10 +22,28 @@
     <div class="section">
       <div class="section__title"><span class="section__step">1</span>上传文件</div>
       <div class="status" id="service-notice" hidden></div>
+      <details class="t1-helper-details" id="upload-helper-details" open>
+        <summary>Chrome 上传助手（使用当前浏览器的内网能力）</summary>
+        <div class="t1-helper-status is-checking" id="upload-helper-status" role="status">正在检测 Chrome 上传助手…</div>
+        <div class="t1-helper-install" id="upload-helper-install" hidden>
+          <p><strong>需求一请先向管理员获取“本机私有扩展 ZIP”</strong>，其中包含对应环境的本机配置。首次使用需要手动安装一次：</p>
+          <ol>
+            <li>将管理员提供的本机私有 ZIP 解压到固定文件夹。</li>
+            <li>复制 <code>chrome://extensions</code> 到地址栏打开，开启“开发者模式”。</li>
+            <li>点击“加载已解压的扩展程序”，选择刚才解压的文件夹，然后刷新本页。</li>
+          </ol>
+          <p class="t1-helper-note">现有<a class="t1-helper-download" href="downloads/itools-tool3-image-helper.zip" download>公开图片助手 ZIP（仅需求三）</a>不含上传凭据，<strong>不能启用需求一</strong>。没有私有包时，请从“启动.bat”进入。</p>
+          <button class="btn btn--ghost btn--sm" id="copy-extensions-url" type="button">复制 chrome://extensions</button>
+        </div>
+        <div class="t1-helper-connected" id="upload-helper-connected" hidden>
+          <strong>Chrome 助手已连接 · v<span id="upload-helper-version">—</span></strong>
+          <span id="upload-helper-capabilities">正在读取需求一配置…</span>
+        </div>
+      </details>
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">🖼️</div>
         <div class="dropzone__title">将 .xlsx 拖到此处，或点击选择</div>
-        <div class="dropzone__desc">在浏览器本地解压 xlsx，按图片锚点提取每张嵌入图及其所在单元格，再通过本地服务上传转链接、写回表格瘦身</div>
+        <div class="dropzone__desc">在浏览器本地解压 xlsx，按图片锚点提取每张嵌入图及其所在单元格，再通过 Chrome 上传助手（本地页面可回退到本地服务）逐图上传并写回链接</div>
         <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
         <input id="file-input" type="file" accept=".xlsx" hidden />
         <div class="dropzone__file" id="file-name" hidden></div>

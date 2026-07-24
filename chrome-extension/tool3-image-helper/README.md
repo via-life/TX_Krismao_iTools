@@ -1,77 +1,79 @@
-# iTools 需求三图片助手
+# iTools 浏览器助手
 
-该 Chrome Manifest V3 扩展让线上工具三使用当前浏览器的元宝登录态读取资源图片。扩展不会读取、保存或输出 Cookie，也不会把图片上传到其他服务。
+该 Chrome Manifest V3 扩展同时服务于 iTools 需求一和需求三：
+
+- 需求一：使用私有包中的测试/正式配置申请临时 COS 凭据，并从当前电脑的内网环境上传 Excel 内嵌图片。
+- 需求三：使用当前 Chrome 登录态读取元宝受保护图片，供网页在浏览器本地生成并嵌入 PNG。
+
+扩展不申请 `cookies` 权限，不读取、显示或保存 Cookie，也不会把长期上传凭据或临时 COS 密钥返回给网页。
+
+## 两种安装包
+
+- 公开包 `downloads/itools-tool3-image-helper.zip`：不含上传凭据，仅支持需求三。
+- 本机私有包 `downloads/private/itools-browser-helper-private.zip`：由仓库根目录的 `config.local.json` 本地生成，同时支持需求一和需求三。
+
+构建私有包：
+
+```powershell
+python scripts/build_private_extension.py
+```
+
+私有 ZIP 包含本机上传凭据，只能保存在本机，不得提交、上传、共享或对外分发。
 
 ## 安装
 
-1. 下载并解压扩展包。
+1. 解压公开或私有 ZIP 到固定文件夹。
 2. 在 Chrome 打开 `chrome://extensions/`。
 3. 开启“开发者模式”。
-4. 点击“加载已解压的扩展程序”，选择本目录。
-5. 刷新工具三页面：
-   `https://via-life.github.io/TX_Krismao_iTools/tool3.html`
+4. 点击“加载已解压的扩展程序”，选择解压目录。
+5. 刷新对应的 iTools 页面。
+
+Chrome 不允许普通网页静默安装扩展，因此首次安装和凭据轮换后的重新加载需要手动完成。
 
 ## 权限范围
 
-- 只注入上述工具三页面。
-- 只允许访问 `https://hunyuan.tencent.com/`。
-- 不申请 `cookies` 权限。
-- 后台只接受 `resourceId`，并固定构造
-  `https://hunyuan.tencent.com/api/resource/download?resourceId=...`。
-- `resourceId` 只允许 8–160 位英文字母、数字、下划线或连字符。
-- 单张图片最大为 30 MiB，且响应必须是受支持的图片 MIME 类型。
+内容脚本只注入：
 
-## 页面通信协议
+- `https://via-life.github.io/TX_Krismao_iTools/tool1.html`
+- `https://via-life.github.io/TX_Krismao_iTools/tool3.html`
 
-页面通过 `window.postMessage` 发送：
+固定 host 权限：
+
+- `https://hunyuan.tencent.com/*`
+- `https://yuanbao.test.hunyuan.woa.com/*`
+- `https://yuanbao.tencent.com/*`
+- `https://*.cos-internal.ap-guangzhou.tencentcos.cn/*`
+
+后台不接受页面传入的 URL、接口地址或 host。需求一只调用固定的 `genUploadInfo` 接口；腾讯云 COS JavaScript SDK只用于 `COS.getAuthorization` 签名，实际图片 PUT 使用 Service Worker 原生 `fetch` 发往固定广州内网 COS 后缀。
+
+## 凭据文件
+
+仓库中的 `credentials.js` 必须始终保持空模板：
 
 ```js
-{ source: "itools-tool3-page", type: "PING" }
+globalThis.ITOOLS_PRIVATE_CONFIG = {};
+```
+
+打包脚本只在私有 ZIP 内存数据中替换该文件，不会把真实值写回扩展源码。公开 ZIP也只包含空模板。
+
+## 页面通信
+
+需求一页面：
+
+```js
+{ source: "itools-tool1-page", type: "PING" }
 ```
 
 ```js
 {
-  source: "itools-tool3-page",
-  type: "FETCH_HUNYUAN_IMAGE",
+  source: "itools-tool1-page",
+  type: "UPLOAD_TOOL1_IMAGE",
   requestId: "页面生成的请求标识",
-  resourceId: "元宝资源标识"
-}
-```
-
-扩展返回：
-
-```js
-{
-  source: "itools-tool3-extension",
-  type: "PONG",
-  version: "1.0.0"
-}
-```
-
-```js
-{
-  source: "itools-tool3-extension",
-  type: "IMAGE_RESULT",
-  requestId: "原请求标识",
-  ok: true,
+  env: "test",
+  filename: "Sheet1_A1.png",
   mime: "image/png",
   base64: "..."
 }
 ```
 
-失败时只返回脱敏错误：
-
-```js
-{
-  source: "itools-tool3-extension",
-  type: "IMAGE_RESULT",
-  requestId: "原请求标识",
-  ok: false,
-  error: {
-    code: "IMAGE_AUTH_REQUIRED",
-    message: "图片需要有效的元宝登录状态，请登录后重试。"
-  }
-}
-```
-
-扩展不会接受或转发页面传入的任意 URL。
+扩展仅返回版本、环境就绪状态，以及上传成功后的 `resourceUrl` 或脱敏错误。需求三继续使用 `itools-tool3-page` / `itools-tool3-extension` 的 `FETCH_HUNYUAN_IMAGE` 协议。

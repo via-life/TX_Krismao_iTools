@@ -2,13 +2,21 @@
    tool1.js —— Excel 图片转 URL（移植 excel2url.py 的 ZIP 方案到浏览器）
    1) JSZip 解压 xlsx，解析 drawings 锚点 → (sheet, 列, 行, media 路径)
    2) 预览每张图 + 所在单元格；打包下载
-   3) 通过仅监听 127.0.0.1 的本地服务逐图上传，取回 URL 后写回单元格、
-      移除图片并导出 _with_urls.xlsx
+   3) 网页模式通过 Chrome 助手逐图上传；本地页面保留 127.0.0.1 服务回退。
+      取回 URL 后写回单元格、移除图片并导出 _with_urls.xlsx
    ============================================================ */
 (function () {
   'use strict';
   var T = window.iTools;
   var NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  var TOOL1_PAGE_SOURCE = 'itools-tool1-page';
+  var TOOL1_EXTENSION_SOURCE = 'itools-tool1-extension';
+  var HELPER_PING = 'PING';
+  var HELPER_PONG = 'PONG';
+  var HELPER_UPLOAD = 'UPLOAD_TOOL1_IMAGE';
+  var HELPER_UPLOAD_RESULT = 'TOOL1_UPLOAD_RESULT';
+  var HELPER_MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+  var HELPER_REQUEST_TIMEOUT_MS = 60000;
 
   var state = { zip: null, fileName: '', images: [], imagesReady: false, uploading: false, generating: false, fileGeneration: 0 };
   var service = {
@@ -17,10 +25,23 @@
     failed: false,
     environments: { test: false, prod: false }
   };
+  var uploadHelper = {
+    connected: false,
+    status: 'checking',
+    version: '',
+    capabilities: { tool1UploadReady: false, testReady: false, prodReady: false },
+    pending: Object.create(null),
+    requestSequence: 0,
+    pingSequence: 0,
+    lastPongSequence: 0,
+    pingTimer: null
+  };
   // images: [{sheetNum, sheetPath, drawingPath, col0, row0, cellRef, media, bytes, blob, url}]
   var el = {};
   ['dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'service-notice',
-   'upload-section', 'env-hint',
+   'upload-section', 'env-hint', 'upload-helper-status', 'upload-helper-install',
+   'upload-helper-connected', 'upload-helper-version', 'upload-helper-capabilities',
+   'copy-extensions-url',
    'norm-header', 'do-upload', 'dl-mapping', 'dl-xlsx', 'up-status'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   function setStatus(node, msg, kind) {
@@ -40,6 +61,28 @@
     return state.images.length > 0 && successfulCount() === state.images.length;
   }
 
+  function helperEnvReady(mode) {
+    return uploadHelper.connected &&
+      uploadHelper.capabilities.tool1UploadReady === true &&
+      uploadHelper.capabilities[mode === 'prod' ? 'prodReady' : 'testReady'] === true;
+  }
+
+  function localEnvReady(mode) {
+    return service.allowed && service.checked && !service.failed && service.environments[mode] === true;
+  }
+
+  function activeTransport(mode) {
+    if (helperEnvReady(mode)) return 'extension';
+    if (localEnvReady(mode)) return 'local';
+    return '';
+  }
+
+  function helperPageSupported() {
+    return window.location.protocol === 'https:' &&
+      window.location.hostname === 'via-life.github.io' &&
+      window.location.pathname === '/TX_Krismao_iTools/tool1.html';
+  }
+
   function resetUploadResults(message) {
     state.images.forEach(function (im) { im.url = ''; });
     el['dl-mapping'].disabled = true;
@@ -50,8 +93,8 @@
   }
 
   function updateUploadButton() {
-    var ready = service.environments[envMode()] === true;
-    el['do-upload'].disabled = state.uploading || state.generating || !state.imagesReady || !service.allowed || !service.checked || !ready || allUploaded();
+    var ready = !!activeTransport(envMode());
+    el['do-upload'].disabled = state.uploading || state.generating || !state.imagesReady || !ready || allUploaded();
     if (state.uploading) el['do-upload'].textContent = '正在上传…';
     else if (allUploaded()) el['do-upload'].textContent = '上传已完成';
     else if (successfulCount()) el['do-upload'].textContent = '继续上传失败项';
@@ -60,17 +103,81 @@
 
   function applyEnv() {
     var mode = envMode();
-    if (!service.allowed) setStatus(el['env-hint'], '当前页面不能上传。请在项目目录双击“启动.bat”，并从 127.0.0.1 页面重新进入需求一。', 'warn');
-    else if (service.failed) setStatus(el['env-hint'], '本地上传服务不可用。请关闭当前静态服务器后双击“启动.bat”重试。', 'error');
-    else if (!service.checked) setStatus(el['env-hint'], '正在检测本地上传服务…');
-    else if (!service.environments[mode]) setStatus(el['env-hint'], envLabel(mode) + '配置未就绪。请检查项目目录中的 config.local.json。', 'error');
-    else setStatus(el['env-hint'], '本地上传服务已连接，' + envLabel(mode) + '配置就绪。', 'ok');
+    if (helperEnvReady(mode)) {
+      el['service-notice'].hidden = true;
+      setStatus(el['env-hint'], 'Chrome 上传助手已连接，' + envLabel(mode) + '已就绪。上传会使用当前浏览器的内网能力。', 'ok');
+    } else if (localEnvReady(mode)) {
+      el['service-notice'].hidden = true;
+      setStatus(el['env-hint'], 'Chrome 助手未就绪，已回退到本地上传服务；' + envLabel(mode) + '配置就绪。', 'ok');
+    } else if (uploadHelper.connected && !uploadHelper.capabilities.tool1UploadReady) {
+      setStatus(el['env-hint'], 'Chrome 助手已连接，但当前安装包未配置需求一上传。请安装管理员提供的本机私有扩展包，或从“启动.bat”进入。', 'warn');
+    } else if (uploadHelper.connected) {
+      setStatus(el['env-hint'], 'Chrome 助手已连接，但' + envLabel(mode) + '凭据未就绪。请更新本机私有扩展包或切换环境。', 'warn');
+    } else if (uploadHelper.status === 'checking' || (service.allowed && !service.checked)) {
+      setStatus(el['env-hint'], '正在检测 Chrome 上传助手和可用上传通道…');
+    } else if (service.allowed && service.failed) {
+      setStatus(el['env-hint'], 'Chrome 助手与本地上传服务均不可用。请确认扩展已启用，或重新双击“启动.bat”。', 'error');
+    } else if (service.allowed) {
+      setStatus(el['env-hint'], envLabel(mode) + '配置未就绪。请更新 Chrome 私有扩展包，或检查 config.local.json。', 'error');
+    } else {
+      setStatus(el['env-hint'], '网页上传需要 Chrome 上传助手。请按上方步骤安装；需求一还需管理员提供的本机私有配置。', 'warn');
+    }
+    if (!service.allowed && !helperEnvReady(mode)) {
+      setStatus(el['service-notice'], helperPageSupported() ?
+        '当前为 GitHub Pages 模式：需求一只能通过已配置的 Chrome 私有上传助手使用内网能力，不会连接 127.0.0.1。' :
+        '当前页面来源不能使用 Chrome 上传助手。请打开 GitHub Pages，或从“启动.bat”进入。', 'warn');
+    }
     updateUploadButton();
+  }
+
+  function updateUploadHelperStatus(status, version) {
+    uploadHelper.status = status;
+    uploadHelper.connected = status === 'connected';
+    if (uploadHelper.connected) uploadHelper.version = String(version || '未知');
+    var ready = uploadHelper.connected && uploadHelper.capabilities.tool1UploadReady;
+    el['upload-helper-status'].className = 't1-helper-status is-' +
+      (uploadHelper.connected && !ready ? 'unready' : status);
+    if (uploadHelper.connected) {
+      el['upload-helper-status'].textContent = ready ? 'Chrome 上传助手已连接。' : 'Chrome 助手已连接，但需求一上传尚未配置。';
+    } else if (status === 'checking') {
+      el['upload-helper-status'].textContent = '正在检测 Chrome 上传助手…';
+    } else if (status === 'local') {
+      el['upload-helper-status'].textContent = '当前为 127.0.0.1 本地页面，将使用本地上传服务，无需 Chrome 助手。';
+    } else if (status === 'unsupported') {
+      el['upload-helper-status'].textContent = '当前页面来源不受 Chrome 助手支持。请打开 GitHub Pages，或从“启动.bat”进入。';
+    } else {
+      el['upload-helper-status'].textContent = '未检测到可用于需求一的 Chrome 上传助手，请安装管理员提供的本机私有扩展包。';
+    }
+    el['upload-helper-install'].hidden = uploadHelper.connected || status === 'checking' || status === 'local' || status === 'unsupported';
+    el['upload-helper-connected'].hidden = !uploadHelper.connected;
+    if (uploadHelper.connected) {
+      el['upload-helper-version'].textContent = uploadHelper.version;
+      el['upload-helper-capabilities'].textContent = ready ?
+        ('测试环境：' + (uploadHelper.capabilities.testReady ? '已就绪' : '未配置') +
+         '；正式环境：' + (uploadHelper.capabilities.prodReady ? '已就绪' : '未配置')) :
+        '当前为公开无凭据包；需求一请使用管理员提供的本机私有扩展包。';
+    }
+    applyEnv();
+  }
+
+  function pingUploadHelper() {
+    if (!helperPageSupported()) {
+      updateUploadHelperStatus(service.allowed ? 'local' : 'unsupported');
+      return;
+    }
+    var pingSequence = ++uploadHelper.pingSequence;
+    if (!uploadHelper.connected) updateUploadHelperStatus('checking');
+    window.postMessage({ source: TOOL1_PAGE_SOURCE, type: HELPER_PING }, window.location.origin);
+    clearTimeout(uploadHelper.pingTimer);
+    uploadHelper.pingTimer = setTimeout(function () {
+      if (uploadHelper.lastPongSequence < pingSequence) updateUploadHelperStatus('missing');
+    }, 1200);
   }
 
   function checkLocalService() {
     if (!service.allowed) {
-      setStatus(el['service-notice'], '需求一上传仅支持本地一键服务。请在项目目录双击“启动.bat”，再从 http://127.0.0.1:8080 打开；当前在线/静态页面不会直连内网接口。', 'warn');
+      service.checked = true;
+      service.failed = false;
       applyEnv();
       return;
     }
@@ -98,13 +205,30 @@
   el['do-upload'].addEventListener('click', doUpload);
   el['dl-mapping'].addEventListener('click', downloadMapping);
   el['dl-xlsx'].addEventListener('click', downloadRewritten);
+  el['copy-extensions-url'].addEventListener('click', function () {
+    var value = 'chrome://extensions';
+    function copied() {
+      el['copy-extensions-url'].textContent = '已复制';
+      setTimeout(function () { el['copy-extensions-url'].textContent = '复制 chrome://extensions'; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(copied).catch(function () {
+        window.prompt('请复制并粘贴到 Chrome 地址栏：', value);
+      });
+    } else {
+      window.prompt('请复制并粘贴到 Chrome 地址栏：', value);
+    }
+  });
   [].forEach.call(document.querySelectorAll('input[name="env"]'), function (r) {
     r.addEventListener('change', function () {
       resetUploadResults('已切换至' + envLabel(envMode()) + '，上一环境的上传结果已清空。');
       applyEnv();
     });
   });
+  window.addEventListener('message', onUploadHelperMessage);
+  window.addEventListener('focus', pingUploadHelper);
   checkLocalService();
+  pingUploadHelper();
 
   /* ---------- 列号 ↔ 字母 ---------- */
   function colLetter(col1) {
@@ -279,10 +403,109 @@
     updateUploadButton();
   }
 
-  function uploadOne(im, mode) {
-    if (!im.blob) return Promise.reject(new Error(im.cellRef + ' 对应的图片内容读取失败。'));
-    var extension = (im.media.split('.').pop() || 'png').replace(/[^a-zA-Z0-9]/g, '') || 'png';
-    var filename = 'Sheet' + im.sheetNum + '_' + im.cellRef + '.' + extension;
+  function helperCapabilitiesFromMessage(message) {
+    var capabilities = message && message.capabilities;
+    if (!capabilities || typeof capabilities !== 'object') capabilities = message || {};
+    return {
+      tool1UploadReady: capabilities.tool1UploadReady === true,
+      testReady: capabilities.testReady === true,
+      prodReady: capabilities.prodReady === true
+    };
+  }
+
+  function validUploadedUrl(value) {
+    try {
+      var parsed = new URL(String(value || '').trim());
+      return parsed.protocol === 'https:' && !!parsed.hostname ? parsed.href : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function onUploadHelperMessage(event) {
+    var message = event.data;
+    if (!helperPageSupported() || event.source !== window || event.origin !== window.location.origin || !message ||
+        message.source !== TOOL1_EXTENSION_SOURCE) return;
+    if (message.type === HELPER_PONG) {
+      clearTimeout(uploadHelper.pingTimer);
+      uploadHelper.lastPongSequence = uploadHelper.pingSequence;
+      uploadHelper.capabilities = helperCapabilitiesFromMessage(message);
+      updateUploadHelperStatus('connected', message.version);
+      return;
+    }
+    if (message.type !== HELPER_UPLOAD_RESULT || !message.requestId) return;
+    var pending = uploadHelper.pending[message.requestId];
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    delete uploadHelper.pending[message.requestId];
+    if (!message.ok) {
+      var helperError = message.error || {};
+      pending.reject(new Error(helperError.message || 'Chrome 上传助手处理失败，请重试。'));
+      return;
+    }
+    var url = validUploadedUrl(message.url);
+    if (!url) {
+      pending.reject(new Error('Chrome 上传助手未返回有效的 HTTPS URL。'));
+      return;
+    }
+    pending.resolve(url);
+  }
+
+  function blobToBase64(blob) {
+    if (blob.size > HELPER_MAX_IMAGE_BYTES) {
+      return Promise.reject(new Error('单张图片超过 Chrome 上传助手的 30 MiB 限制。'));
+    }
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = String(reader.result || '');
+        var comma = result.indexOf(',');
+        if (comma < 0 || !result.slice(comma + 1)) {
+          reject(new Error('图片内容编码失败，请重新选择 Excel。'));
+          return;
+        }
+        resolve(result.slice(comma + 1));
+      };
+      reader.onerror = function () { reject(new Error('图片内容读取失败，请重新选择 Excel。')); };
+      reader.onabort = function () { reject(new Error('图片内容读取已取消。')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function mimeForExtension(extension) {
+    var types = {
+      bmp: 'image/bmp', gif: 'image/gif', jpeg: 'image/jpeg', jpg: 'image/jpeg',
+      png: 'image/png', tif: 'image/tiff', tiff: 'image/tiff', webp: 'image/webp'
+    };
+    return types[String(extension || '').toLowerCase()] || 'application/octet-stream';
+  }
+
+  function uploadWithExtension(im, mode, filename, extension) {
+    if (!helperEnvReady(mode)) {
+      return Promise.reject(new Error('Chrome 上传助手或当前环境已断开，请刷新页面后重试。'));
+    }
+    return blobToBase64(im.blob).then(function (base64) {
+      return new Promise(function (resolve, reject) {
+        var requestId = 'tool1-' + Date.now() + '-' + (++uploadHelper.requestSequence);
+        var timer = setTimeout(function () {
+          delete uploadHelper.pending[requestId];
+          reject(new Error('Chrome 上传助手响应超时，请确认扩展已启用且内网连接正常。'));
+        }, HELPER_REQUEST_TIMEOUT_MS);
+        uploadHelper.pending[requestId] = { resolve: resolve, reject: reject, timer: timer };
+        window.postMessage({
+          source: TOOL1_PAGE_SOURCE,
+          type: HELPER_UPLOAD,
+          requestId: requestId,
+          env: mode,
+          filename: filename,
+          mime: im.blob.type || mimeForExtension(extension),
+          base64: base64
+        }, window.location.origin);
+      });
+    });
+  }
+
+  function uploadWithLocalService(im, mode, filename) {
     var endpoint = '/api/tool1/upload?env=' + encodeURIComponent(mode) + '&filename=' + encodeURIComponent(filename);
     return fetch(endpoint, {
       method: 'POST',
@@ -299,18 +522,30 @@
         var message = data && data.error && data.error.message;
         throw new Error(message || ('本地上传服务返回 HTTP ' + result.response.status + '。'));
       }
-      var url = typeof data.url === 'string' ? data.url.trim() : '';
-      if (!url) throw new Error('本地上传服务未返回有效 URL。');
+      var url = validUploadedUrl(data.url);
+      if (!url) throw new Error('本地上传服务未返回有效的 HTTPS URL。');
       return url;
     });
+  }
+
+  function uploadOne(im, mode, transport) {
+    if (!im.blob) return Promise.reject(new Error(im.cellRef + ' 对应的图片内容读取失败。'));
+    var extension = (im.media.split('.').pop() || 'png').replace(/[^a-zA-Z0-9]/g, '') || 'png';
+    var filename = 'Sheet' + im.sheetNum + '_' + im.cellRef + '.' + extension;
+    return transport === 'extension' ?
+      uploadWithExtension(im, mode, filename, extension) :
+      uploadWithLocalService(im, mode, filename);
   }
 
   function doUpload() {
     if (state.uploading) return;
     if (!state.imagesReady || !state.images.length) { setStatus(el['up-status'], '请先选择并解析含图片的 xlsx。', 'error'); return; }
-    if (!service.allowed) { setStatus(el['up-status'], '当前页面不能上传，请双击“启动.bat”并从 127.0.0.1 页面重新进入。', 'error'); return; }
     var mode = envMode();
-    if (!service.checked || !service.environments[mode]) { setStatus(el['up-status'], envLabel(mode) + '配置未就绪，请检查 config.local.json。', 'error'); return; }
+    var transport = activeTransport(mode);
+    if (!transport) {
+      setStatus(el['up-status'], envLabel(mode) + '上传通道未就绪。请安装并配置 Chrome 上传助手；本地页面也可检查 config.local.json。', 'error');
+      return;
+    }
     if (mode === 'prod' && !window.confirm('即将把图片上传到正式环境。请确认文件和环境无误，是否继续？')) return;
 
     var total = state.images.length;
@@ -326,7 +561,7 @@
     state.images.forEach(function (im) {
       if (im.url) return;
       chain = chain.then(function () {
-        return uploadOne(im, mode).then(function (url) {
+        return uploadOne(im, mode, transport).then(function (url) {
           im.url = url;
           ok++;
           done++;
@@ -335,7 +570,11 @@
           done++;
           failed++;
           lastError = (e && e.message) ? e.message : '未知错误';
-          if (/Failed to fetch|NetworkError|Load failed/i.test(lastError)) lastError = '无法连接本地上传服务，请确认“启动.bat”窗口仍在运行且当前内网可用。';
+          if (/Failed to fetch|NetworkError|Load failed/i.test(lastError)) {
+            lastError = transport === 'extension' ?
+              'Chrome 上传助手无法连接内网接口，请确认本机私有扩展配置和内网连接。' :
+              '无法连接本地上传服务，请确认“启动.bat”窗口仍在运行且当前内网可用。';
+          }
           setStatus(el['up-status'], '上传中… ' + done + '/' + total + '（成功 ' + ok + '，最近错误：' + lastError + '）', 'warn');
         });
       });

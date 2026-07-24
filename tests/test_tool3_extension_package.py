@@ -11,6 +11,9 @@ PACKAGE_FILES = {
     "manifest.json",
     "background.js",
     "content.js",
+    "credentials.js",
+    "cos-js-sdk-v5.min.js",
+    "COS-SDK-LICENSE.txt",
     "README.md",
 }
 
@@ -22,22 +25,29 @@ class Tool3ExtensionManifestTests(unittest.TestCase):
             (EXTENSION_ROOT / "manifest.json").read_text(encoding="utf-8")
         )
 
-    def test_manifest_uses_mv3_and_only_required_hunyuan_host(self) -> None:
+    def test_manifest_uses_mv3_and_only_fixed_required_hosts(self) -> None:
         self.assertEqual(self.manifest["manifest_version"], 3)
         self.assertEqual(
-            self.manifest.get("host_permissions"),
-            ["https://hunyuan.tencent.com/*"],
+            set(self.manifest.get("host_permissions", [])),
+            {
+                "https://hunyuan.tencent.com/*",
+                "https://yuanbao.test.hunyuan.woa.com/*",
+                "https://yuanbao.tencent.com/*",
+                "https://*.cos-internal.ap-guangzhou.tencentcos.cn/*",
+            },
         )
         self.assertNotIn("cookies", self.manifest.get("permissions", []))
 
-    def test_content_script_is_limited_to_the_production_tool3_page(self) -> None:
+    def test_content_script_is_limited_to_production_tool1_and_tool3(self) -> None:
         self.assertEqual(
             self.manifest["content_scripts"],
             [
                 {
                     "matches": [
                         "https://via-life.github.io/"
-                        "TX_Krismao_iTools/tool3.html*"
+                        "TX_Krismao_iTools/tool1.html*",
+                        "https://via-life.github.io/"
+                        "TX_Krismao_iTools/tool3.html*",
                     ],
                     "js": ["content.js"],
                     "run_at": "document_start",
@@ -85,7 +95,7 @@ class Tool3ExtensionSourceSafetyTests(unittest.TestCase):
             self.background,
         )
         self.assertIn(
-            'const ALLOWED_PAGE_PATH = "/TX_Krismao_iTools/tool3.html";',
+            'const TOOL3_PAGE_PATH = "/TX_Krismao_iTools/tool3.html";',
             self.background,
         )
 
@@ -98,9 +108,16 @@ class Tool3ExtensionSourceSafetyTests(unittest.TestCase):
         )
         self.assertIn("event.source !== window", self.content)
         self.assertIn("event.origin !== PAGE_ORIGIN", self.content)
-        self.assertIn("event.data.source !== PAGE_SOURCE", self.content)
         self.assertIn(
-            'event.data.type !== "FETCH_HUNYUAN_IMAGE"',
+            "event.data.source === TOOL3_PAGE_SOURCE",
+            self.content,
+        )
+        self.assertIn(
+            "event.data.source === TOOL1_PAGE_SOURCE",
+            self.content,
+        )
+        self.assertIn(
+            'message.type !== "FETCH_HUNYUAN_IMAGE"',
             self.content,
         )
         self.assertNotIn("chrome.cookies", self.content)
