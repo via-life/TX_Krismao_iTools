@@ -667,14 +667,14 @@
   }
 
   function pingImageHelper() {
-    updateImageHelperStatus('checking');
+    if (!imageHelper.connected) updateImageHelperStatus('checking');
     window.postMessage({
       source: 'itools-tool3-page',
       type: 'PING'
     }, window.location.origin);
     clearTimeout(imageHelper.pingTimer);
     imageHelper.pingTimer = setTimeout(function () {
-      if (!imageHelper.connected) updateImageHelperStatus('missing');
+      updateImageHelperStatus('missing');
     }, 1200);
   }
 
@@ -836,11 +836,9 @@
   function captureImageUrl(url) {
     if (captureImageCache[url]) return captureImageCache[url].promise;
     var entry = {};
-    var hunyuanWithHelper = !!extractHunyuanResourceId(url) && imageHelper.connected;
-    var blobPromise = hunyuanWithHelper ? imageBlobFromExtension(url) :
-      imageBlobFromBrowser(url).catch(function () {
-        return imageBlobFromExtension(url);
-      });
+    var blobPromise = imageBlobFromBrowser(url).catch(function () {
+      return imageBlobFromExtension(url);
+    });
     entry.promise = blobPromise.then(function (blob) {
       if (!blob || !blob.size) throw new Error('图片内容为空');
       if (captureImageCache[url] !== entry) {

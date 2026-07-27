@@ -73,6 +73,9 @@ const context = {
     if (value.includes("octet_image_123")) {
       return imageResponse("application/octet-stream", validPngBytes);
     }
+    if (value.includes("page_preferred_image_123")) {
+      return imageResponse("image/png", validPngBytes);
+    }
     if (value.includes("bad_octet_123")) {
       return imageResponse("application/octet-stream", invalidJsonBytes);
     }
@@ -170,6 +173,8 @@ const octetUrl =
   "https://hunyuan.tencent.com/api/resource/download?resourceId=octet_image_123";
 const badOctetUrl =
   "https://hunyuan.tencent.com/api/resource/download?resourceId=bad_octet_123";
+const pagePreferredUrl =
+  "https://hunyuan.tencent.com/api/resource/download?resourceId=page_preferred_image_123";
 const extensionUrl =
   "https://hunyuan.tencent.com/api/resource/download?resourceId=extension_image_123";
 
@@ -278,6 +283,19 @@ emitExtensionMessage({
   type: "PONG",
   version: "2.1.1",
 });
+for (const callback of windowListeners.get("focus") || []) callback();
+const pagePreferred = captureImage(pagePreferredUrl);
+const pagePreferredRoot = {
+  querySelectorAll() {
+    return [pagePreferred.image];
+  },
+};
+await bindPreviewImages(pagePreferredRoot);
+assert.equal(fetchCallCount, 6);
+assert.equal(extensionFetchCallCount, 0);
+assert.match(pagePreferred.image.assignedSources[0], /^blob:/u);
+assert.equal(pagePreferred.fallback.hidden, true);
+
 const extensionPreview = captureImage(extensionUrl);
 const extensionRoot = {
   querySelectorAll() {
@@ -286,12 +304,12 @@ const extensionRoot = {
 };
 await bindPreviewImages(extensionRoot);
 assert.equal(extensionFetchCallCount, 1);
-assert.equal(fetchCallCount, 5);
+assert.equal(fetchCallCount, 7);
 assert.equal(extensionPreview.image.assignedSources.length, 1);
 assert.match(extensionPreview.image.assignedSources[0], /^blob:/u);
 assert.equal(extensionPreview.fallback.hidden, true);
 await prepareCaptureImages(extensionRoot);
 assert.equal(extensionFetchCallCount, 1);
-assert.equal(fetchCallCount, 5);
+assert.equal(fetchCallCount, 7);
 
 console.log("tool3 image fallback tests passed");
