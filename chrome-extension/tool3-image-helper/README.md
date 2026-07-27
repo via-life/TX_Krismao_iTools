@@ -28,7 +28,7 @@ python scripts/build_private_extension.py
 4. 点击“加载已解压的扩展程序”，选择解压目录。
 5. 刷新对应的 iTools 页面。
 
-升级到 2.1.0 或更高版本时，请覆盖旧解压目录，并在 `chrome://extensions/` 点击该扩展的「重新加载」。Chrome 不允许普通网页静默安装扩展，因此首次安装、版本升级和凭据轮换后的重新加载需要手动完成。
+升级到 2.1.1 或更高版本时，请覆盖旧解压目录，并在 `chrome://extensions/` 点击该扩展的「重新加载」。2.1.1 兼容以 `application/octet-stream` 返回的有效 PNG/JPEG/GIF/WebP 图片。Chrome 不允许普通网页静默安装扩展，因此首次安装、版本升级和凭据轮换后的重新加载需要手动完成。
 
 ## 权限范围
 

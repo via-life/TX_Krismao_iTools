@@ -101,6 +101,45 @@ function normalizeMimeType(value) {
     .toLowerCase();
 }
 
+function sniffImageMime(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 6) {
+    const signature = String.fromCharCode(...bytes.subarray(0, 6));
+    if (signature === "GIF87a" || signature === "GIF89a") {
+      return "image/gif";
+    }
+  }
+  if (
+    bytes.length >= 12 &&
+    String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF" &&
+    String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return "";
+}
+
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   const chunks = [];
@@ -236,14 +275,7 @@ async function fetchHunyuanImage(resourceId) {
     );
   }
 
-  const mime = normalizeMimeType(response.headers.get("content-type"));
-  if (!ALLOWED_IMAGE_MIME_TYPES.has(mime) || mime === "application/octet-stream") {
-    return errorResult(
-      "INVALID_IMAGE_RESPONSE",
-      "图片服务返回了不支持的内容。",
-    );
-  }
-
+  const declaredMime = normalizeMimeType(response.headers.get("content-type"));
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_BYTES) {
     return errorResult("IMAGE_TOO_LARGE", "单张图片超过 30 MiB 限制。");
@@ -266,6 +298,18 @@ async function fetchHunyuanImage(resourceId) {
   }
   if (buffer.byteLength > MAX_IMAGE_BYTES) {
     return errorResult("IMAGE_TOO_LARGE", "单张图片超过 30 MiB 限制。");
+  }
+
+  const mime =
+    ALLOWED_IMAGE_MIME_TYPES.has(declaredMime) &&
+    declaredMime !== "application/octet-stream"
+      ? declaredMime
+      : sniffImageMime(buffer);
+  if (!mime) {
+    return errorResult(
+      "INVALID_IMAGE_RESPONSE",
+      "图片服务返回了不支持的内容。",
+    );
   }
 
   return {

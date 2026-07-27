@@ -6,6 +6,26 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = fs.readFileSync(path.join(repoRoot, "js", "tool3.js"), "utf8");
+const validPngBytes = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+const invalidJsonBytes = new TextEncoder().encode('{"error":"expired"}');
+
+function imageResponse(mime, bytes) {
+  return {
+    ok: true,
+    headers: {
+      get(name) {
+        const key = String(name).toLowerCase();
+        if (key === "content-type") return mime;
+        if (key === "content-length") return String(bytes.byteLength);
+        return null;
+      },
+    },
+    arrayBuffer: async () =>
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  };
+}
 
 function elementStub() {
   return {
@@ -37,12 +57,15 @@ const context = {
   clearTimeout() {},
   console,
   fetch: async (url) => {
-    if (String(url).includes("good_image_123")) {
-      return {
-        ok: true,
-        headers: { get: () => "image/png" },
-        blob: async () => new Blob(["png"], { type: "image/png" }),
-      };
+    const value = String(url);
+    if (value.includes("good_image_123")) {
+      return imageResponse("image/png", validPngBytes);
+    }
+    if (value.includes("octet_image_123")) {
+      return imageResponse("application/octet-stream", validPngBytes);
+    }
+    if (value.includes("bad_octet_123")) {
+      return imageResponse("application/octet-stream", invalidJsonBytes);
     }
     throw new TypeError("cross-origin image unavailable");
   },
@@ -99,12 +122,17 @@ const failedUrl =
   "https://hunyuan.tencent.com/api/resource/download?resourceId=expired_image_123";
 const goodUrl =
   "https://hunyuan.tencent.com/api/resource/download?resourceId=good_image_123";
+const octetUrl =
+  "https://hunyuan.tencent.com/api/resource/download?resourceId=octet_image_123";
+const badOctetUrl =
+  "https://hunyuan.tencent.com/api/resource/download?resourceId=bad_octet_123";
 
 const gallery = imageGallery([failedUrl]);
 assert.match(gallery, /🔗/u);
 assert.ok(gallery.includes(failedUrl));
 assert.equal(isCurrentImageHelperVersion("2.0.1"), false);
-assert.equal(isCurrentImageHelperVersion("2.1.0"), true);
+assert.equal(isCurrentImageHelperVersion("2.1.0"), false);
+assert.equal(isCurrentImageHelperVersion("2.1.1"), true);
 assert.equal(isCurrentImageHelperVersion("3.0.0"), true);
 
 function captureImage(url) {
@@ -145,10 +173,12 @@ function captureImage(url) {
 }
 
 const good = captureImage(goodUrl);
+const octet = captureImage(octetUrl);
+const badOctet = captureImage(badOctetUrl);
 const failed = captureImage(failedUrl);
 const root = {
   querySelectorAll() {
-    return [good.image, failed.image];
+    return [good.image, octet.image, badOctet.image, failed.image];
   },
 };
 
@@ -156,6 +186,11 @@ await prepareCaptureImages(root);
 
 assert.equal(good.link.hidden, false);
 assert.equal(good.fallback.hidden, true);
+assert.equal(octet.link.hidden, false);
+assert.equal(octet.fallback.hidden, true);
+assert.equal(badOctet.link.hidden, true);
+assert.equal(badOctet.fallback.hidden, false);
+assert.equal(badOctet.attributes["data-error-code"], "EXTENSION_MISSING");
 assert.equal(failed.link.hidden, true);
 assert.equal(failed.fallback.hidden, false);
 assert.equal(failed.attributes["data-error-code"], "EXTENSION_MISSING");

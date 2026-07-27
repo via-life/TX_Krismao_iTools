@@ -27,6 +27,7 @@ class Tool3ExtensionManifestTests(unittest.TestCase):
 
     def test_manifest_uses_mv3_and_only_fixed_required_hosts(self) -> None:
         self.assertEqual(self.manifest["manifest_version"], 3)
+        self.assertEqual(self.manifest["version"], "2.1.1")
         self.assertEqual(
             set(self.manifest.get("host_permissions", [])),
             {
@@ -108,6 +109,8 @@ class Tool3ExtensionSourceSafetyTests(unittest.TestCase):
             'const TOOL3_PAGE_PATH = "/TX_Krismao_iTools/tool3.html";',
             self.background,
         )
+        self.assertIn("function sniffImageMime(buffer)", self.background)
+        self.assertIn('declaredMime !== "application/octet-stream"', self.background)
 
     def test_content_bridge_accepts_only_the_expected_page_and_message_shape(
         self,
@@ -131,6 +134,10 @@ class Tool3ExtensionSourceSafetyTests(unittest.TestCase):
             self.content,
         )
         self.assertNotIn("chrome.cookies", self.content)
+        self.assertIn(
+            "chrome.runtime.lastError || !result || result.ok !== true",
+            self.content,
+        )
 
 
 class Tool3ExtensionZipTests(unittest.TestCase):

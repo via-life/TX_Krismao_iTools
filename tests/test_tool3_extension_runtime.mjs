@@ -273,6 +273,46 @@ assert.equal(tool3Runtime.state.fetchCalls[0].options.credentials, "include");
 assert.equal(tool3Runtime.state.fetchCalls[0].options.cache, "no-store");
 assert.equal(tool3Runtime.state.fetchCalls[0].options.redirect, "follow");
 
+const sniffedPngBytes = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+tool3Runtime.state.fetchImpl = async () =>
+  imageResponse({
+    headers: {
+      get: (name) =>
+        String(name).toLowerCase() === "content-type"
+          ? "application/octet-stream"
+          : String(sniffedPngBytes.byteLength),
+    },
+    arrayBuffer: async () => sniffedPngBytes.buffer,
+  });
+const octetStreamPng = await send(
+  tool3Runtime,
+  { type: "FETCH_HUNYUAN_IMAGE", resourceId: "valid_id_123" },
+  tool3Sender,
+);
+assert.equal(octetStreamPng.result.ok, true);
+assert.equal(octetStreamPng.result.mime, "image/png");
+assert.equal(octetStreamPng.result.base64, "iVBORw0KGgo=");
+
+const invalidJsonBytes = new TextEncoder().encode('{"error":"expired"}');
+tool3Runtime.state.fetchImpl = async () =>
+  imageResponse({
+    headers: {
+      get: (name) =>
+        String(name).toLowerCase() === "content-type"
+          ? "application/octet-stream"
+          : String(invalidJsonBytes.byteLength),
+    },
+    arrayBuffer: async () => invalidJsonBytes.buffer,
+  });
+const octetStreamJson = await send(
+  tool3Runtime,
+  { type: "FETCH_HUNYUAN_IMAGE", resourceId: "valid_id_123" },
+  tool3Sender,
+);
+assert.equal(octetStreamJson.result.error.code, "INVALID_IMAGE_RESPONSE");
+
 tool3Runtime.state.fetchImpl = async () => imageResponse({ status: 403, ok: false });
 const imageUnauthorized = await send(
   tool3Runtime,

@@ -59,7 +59,10 @@ function handleTool3Message(message) {
   if (message.type === "PING") {
     chrome.runtime.sendMessage(
       { type: "ENABLE_TOOL3_IMAGE_READ" },
-      () => {
+      (result) => {
+        if (chrome.runtime.lastError || !result || result.ok !== true) {
+          return;
+        }
         postToPage(TOOL3_EXTENSION_SOURCE, {
           type: "PONG",
           version: chrome.runtime.getManifest().version,

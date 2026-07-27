@@ -29,6 +29,15 @@
   var DIRECT_IMAGE_TIMEOUT_MS = 8000;
   var IMAGE_HELPER_TIMEOUT_MS = 35000;
   var MAX_PENDING_PNG_ENCODINGS = 3;
+  var MAX_CAPTURE_IMAGE_BYTES = 30 * 1024 * 1024;
+  var ALLOWED_CAPTURE_IMAGE_MIME_TYPES = {
+    'image/avif': true,
+    'image/bmp': true,
+    'image/gif': true,
+    'image/jpeg': true,
+    'image/png': true,
+    'image/webp': true
+  };
   var el = {};
 
   [
@@ -635,7 +644,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 0)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 1)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -646,7 +655,7 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      'Chrome 图片助手版本过旧，请重新下载 2.1.0 或更高版本并在扩展页重新加载。' :
+      'Chrome 图片助手版本过旧，请重新下载 2.1.1 或更高版本并在扩展页重新加载。' :
       (connected ? 'Chrome 图片助手已连接。' :
         (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
           '未检测到 Chrome 图片助手，请按下方步骤安装。'));
@@ -684,16 +693,8 @@
   }
 
   function imageBlobFromBase64(base64, mime) {
-    var allowedMimeTypes = {
-      'image/avif': true,
-      'image/bmp': true,
-      'image/gif': true,
-      'image/jpeg': true,
-      'image/png': true,
-      'image/webp': true
-    };
     mime = String(mime || '').toLowerCase();
-    if (!allowedMimeTypes[mime]) {
+    if (!ALLOWED_CAPTURE_IMAGE_MIME_TYPES[mime]) {
       throw new Error('图片助手返回了无效的图片类型');
     }
     if (String(base64 || '').length > 42 * 1024 * 1024) {
@@ -716,6 +717,26 @@
     return new Blob([bytes], { type: mime });
   }
 
+  function sniffImageMime(bytes) {
+    if (bytes.length >= 8 &&
+        bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+        bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+      return 'image/png';
+    }
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    if (bytes.length >= 6) {
+      var gif = String.fromCharCode.apply(null, bytes.subarray(0, 6));
+      if (gif === 'GIF87a' || gif === 'GIF89a') return 'image/gif';
+    }
+    if (bytes.length >= 12 &&
+        String.fromCharCode.apply(null, bytes.subarray(0, 4)) === 'RIFF' &&
+        String.fromCharCode.apply(null, bytes.subarray(8, 12)) === 'WEBP') {
+      return 'image/webp';
+    }
+    return '';
+  }
   function imageBlobFromExtension(url) {
     var resourceId = extractHunyuanResourceId(url);
     if (!resourceId) {
@@ -790,9 +811,21 @@
       signal: controller.signal
     }).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status);
-      var contentType = String(response.headers.get('content-type') || '').toLowerCase();
-      if (contentType.indexOf('image/') !== 0) throw new Error('响应不是图片');
-      return response.blob();
+      var declaredMime = String(response.headers.get('content-type') || '')
+        .split(';')[0].trim().toLowerCase();
+      var declaredLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_CAPTURE_IMAGE_BYTES) {
+        throw new Error('图片超过 30 MiB 限制');
+      }
+      return response.arrayBuffer().then(function (buffer) {
+        if (!buffer.byteLength) throw new Error('图片内容为空');
+        if (buffer.byteLength > MAX_CAPTURE_IMAGE_BYTES) throw new Error('图片超过 30 MiB 限制');
+        var bytes = new Uint8Array(buffer);
+        var mime = ALLOWED_CAPTURE_IMAGE_MIME_TYPES[declaredMime] ?
+          declaredMime : sniffImageMime(bytes);
+        if (!mime) throw new Error('响应不是支持的图片');
+        return new Blob([bytes], { type: mime });
+      });
     }).finally(function () {
       clearTimeout(timer);
     });
@@ -941,7 +974,7 @@
       }
       setStatus('正在批量渲染…（' + (index + 1) + '/' + state.sessions.length + '）');
       var current = index;
-      return captureSession(current).then(canvasToBlob).then(function (blob) {
+      return captureSession(current, { releaseImages: true }).then(canvasToBlob).then(function (blob) {
         zip.file((current + 1) + '_' + safeName(state.sessions[current].cid) + '.png', blob);
         index++;
         return step();

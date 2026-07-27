@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "iTools 浏览器助手",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "为 iTools 需求一提供内网上传，并使用当前 Chrome 登录态读取需求三受保护图片。",
   "host_permissions": [
     "https://hunyuan.tencent.com/*",
