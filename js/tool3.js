@@ -402,24 +402,47 @@
     }
   }
 
-  function loadPreviewImage(image) {
-    if (image.__tool3ImageReady) return image.__tool3ImageReady;
-    var original = image.getAttribute('data-url');
-    var item = image.closest('.t3-img-item');
+  function markImageLoaded(item) {
+    if (!item) return;
     var link = item.querySelector('.t3-img-item__link');
     var fallback = item.querySelector('.t3-img-item__fallback');
-    image.__tool3ImageReady = captureImageUrl(original).then(function (localUrl) {
-      return setImageSource(image, localUrl);
-    }).then(function () {
-      link.hidden = false;
+    if (link) link.hidden = false;
+    if (fallback) {
       fallback.hidden = true;
       fallback.removeAttribute('data-error-code');
+    }
+  }
+
+  // 导出用：必须把图片转成同源 blob，html2canvas 才能画出真实图片而不是链接。
+  function loadCaptureImage(image) {
+    if (image.__tool3CaptureReady) return image.__tool3CaptureReady;
+    var original = image.getAttribute('data-url');
+    var item = image.closest('.t3-img-item');
+    image.__tool3CaptureReady = captureImageUrl(original).then(function (localUrl) {
+      return setImageSource(image, localUrl);
+    }).then(function () {
+      markImageLoaded(item);
       return true;
     }).catch(function (error) {
       showImageFallback(image, error);
       return false;
     });
-    return image.__tool3ImageReady;
+    return image.__tool3CaptureReady;
+  }
+
+  // 在线预览：优先让浏览器直接加载远程图片（跨域 <img> 展示无需 CORS），
+  // 失败时再回退到 blob（fetch / 扩展）路径，仍失败才显示链接兜底。
+  function loadPreviewImage(image) {
+    if (image.__tool3PreviewReady) return image.__tool3PreviewReady;
+    var original = image.getAttribute('data-url');
+    var item = image.closest('.t3-img-item');
+    image.__tool3PreviewReady = setImageSource(image, original).then(function () {
+      markImageLoaded(item);
+      return true;
+    }).catch(function () {
+      return loadCaptureImage(image);
+    });
+    return image.__tool3PreviewReady;
   }
 
   function bindPreviewImages(root) {
@@ -433,8 +456,8 @@
         }
       });
     });
-    root.__tool3ImagesReady = Promise.all(images.map(loadPreviewImage));
-    return root.__tool3ImagesReady;
+    root.__tool3PreviewReady = Promise.all(images.map(loadPreviewImage));
+    return root.__tool3PreviewReady;
   }
 
   function escape(value) {
@@ -879,11 +902,11 @@
   }
 
   function prepareCaptureImages(root) {
-    if (root.__tool3ImagesReady) return root.__tool3ImagesReady;
-    root.__tool3ImagesReady = Promise.all(
-      [].slice.call(root.querySelectorAll('.t3-chat-img')).map(loadPreviewImage)
+    if (root.__tool3CaptureReady) return root.__tool3CaptureReady;
+    root.__tool3CaptureReady = Promise.all(
+      [].slice.call(root.querySelectorAll('.t3-chat-img')).map(loadCaptureImage)
     );
-    return root.__tool3ImagesReady;
+    return root.__tool3CaptureReady;
   }
 
   function releaseCaptureImages(root) {

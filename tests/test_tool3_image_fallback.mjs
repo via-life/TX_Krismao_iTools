@@ -186,7 +186,9 @@ assert.equal(isCurrentImageHelperVersion("2.1.0"), false);
 assert.equal(isCurrentImageHelperVersion("2.1.1"), true);
 assert.equal(isCurrentImageHelperVersion("3.0.0"), true);
 
-function captureImage(url) {
+function captureImage(url, options) {
+  options = options || {};
+  const directLoadable = options.directLoadable === true;
   const link = { hidden: false, addEventListener() {} };
   const attributes = {};
   const fallback = {
@@ -216,29 +218,35 @@ function captureImage(url) {
     set src(value) {
       this.assignedSources.push(value);
       this.currentSrc = value;
-      if (value.startsWith("blob:")) {
+      // 真实浏览器里跨域 <img> 直接展示远程图无需 CORS；blob 一定可解码。
+      if (value.startsWith("blob:") || directLoadable) {
         this.naturalWidth = 1;
-        this.onload();
+        if (this.onload) this.onload();
+      } else {
+        this.naturalWidth = 0;
+        if (this.onerror) this.onerror();
       }
     },
   };
   return { attributes, fallback, image, link };
 }
 
-const preview = captureImage(previewUrl);
+// 预览：远程图能直接加载时，浏览器直接展示，不触发 fetch/扩展。
+const preview = captureImage(previewUrl, { directLoadable: true });
 const previewRoot = {
   querySelectorAll() {
     return [preview.image];
   },
 };
 await bindPreviewImages(previewRoot);
-assert.equal(fetchCallCount, 1);
-assert.deepEqual(preview.image.assignedSources, ["blob:test-image-1"]);
+assert.equal(fetchCallCount, 0);
+assert.deepEqual(preview.image.assignedSources, [previewUrl]);
 assert.equal(preview.link.hidden, false);
 assert.equal(preview.fallback.hidden, true);
+// 导出：强制转成同源 blob，html2canvas 才能嵌入真实图片。
 await prepareCaptureImages(previewRoot);
 assert.equal(fetchCallCount, 1);
-assert.deepEqual(preview.image.assignedSources, ["blob:test-image-1"]);
+assert.match(preview.image.assignedSources[1], /^blob:/u);
 
 const good = captureImage(goodUrl);
 const octet = captureImage(octetUrl);
@@ -293,7 +301,7 @@ const pagePreferredRoot = {
 await bindPreviewImages(pagePreferredRoot);
 assert.equal(fetchCallCount, 6);
 assert.equal(extensionFetchCallCount, 0);
-assert.match(pagePreferred.image.assignedSources[0], /^blob:/u);
+assert.match(pagePreferred.image.assignedSources[1], /^blob:/u);
 assert.equal(pagePreferred.fallback.hidden, true);
 
 const extensionPreview = captureImage(extensionUrl);
@@ -305,8 +313,12 @@ const extensionRoot = {
 await bindPreviewImages(extensionRoot);
 assert.equal(extensionFetchCallCount, 1);
 assert.equal(fetchCallCount, 7);
-assert.equal(extensionPreview.image.assignedSources.length, 1);
-assert.match(extensionPreview.image.assignedSources[0], /^blob:/u);
+assert.match(
+  extensionPreview.image.assignedSources[
+    extensionPreview.image.assignedSources.length - 1
+  ],
+  /^blob:/u,
+);
 assert.equal(extensionPreview.fallback.hidden, true);
 await prepareCaptureImages(extensionRoot);
 assert.equal(extensionFetchCallCount, 1);
