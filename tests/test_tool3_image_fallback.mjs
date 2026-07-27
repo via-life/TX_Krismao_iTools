@@ -93,7 +93,8 @@ context.navigator = {};
 
 vm.runInNewContext(source, context, { filename: "tool3.js" });
 
-const { imageGallery, prepareCaptureImages } = context.__tool3Test;
+const { imageGallery, prepareCaptureImages, isCurrentImageHelperVersion } =
+  context.__tool3Test;
 const failedUrl =
   "https://hunyuan.tencent.com/api/resource/download?resourceId=expired_image_123";
 const goodUrl =
@@ -102,6 +103,9 @@ const goodUrl =
 const gallery = imageGallery([failedUrl]);
 assert.match(gallery, /🔗/u);
 assert.ok(gallery.includes(failedUrl));
+assert.equal(isCurrentImageHelperVersion("2.0.1"), false);
+assert.equal(isCurrentImageHelperVersion("2.1.0"), true);
+assert.equal(isCurrentImageHelperVersion("3.0.0"), true);
 
 function captureImage(url) {
   const link = { hidden: false };

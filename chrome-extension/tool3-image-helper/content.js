@@ -57,10 +57,15 @@ function postTool3Error(requestId, code, message) {
 
 function handleTool3Message(message) {
   if (message.type === "PING") {
-    postToPage(TOOL3_EXTENSION_SOURCE, {
-      type: "PONG",
-      version: chrome.runtime.getManifest().version,
-    });
+    chrome.runtime.sendMessage(
+      { type: "ENABLE_TOOL3_IMAGE_READ" },
+      () => {
+        postToPage(TOOL3_EXTENSION_SOURCE, {
+          type: "PONG",
+          version: chrome.runtime.getManifest().version,
+        });
+      },
+    );
     return;
   }
   if (message.type !== "FETCH_HUNYUAN_IMAGE") return;
@@ -226,6 +231,11 @@ if (
   (window.location.pathname === TOOL1_PAGE_PATH ||
     window.location.pathname === TOOL3_PAGE_PATH)
 ) {
+  if (window.location.pathname === TOOL3_PAGE_PATH) {
+    window.addEventListener("pagehide", () => {
+      chrome.runtime.sendMessage({ type: "DISABLE_TOOL3_IMAGE_READ" });
+    });
+  }
   window.addEventListener("message", (event) => {
     if (
       event.source !== window ||

@@ -41,6 +41,7 @@ function createRuntime(config = {}) {
     imports: [],
     signCalls: [],
     signer: () => "q-sign-algorithm=sha1&safe-signature",
+    sessionRuleCalls: [],
   };
   let listener;
   const context = {};
@@ -57,6 +58,11 @@ function createRuntime(config = {}) {
     clearTimeout,
     setTimeout,
     chrome: {
+      declarativeNetRequest: {
+        async updateSessionRules(options) {
+          state.sessionRuleCalls.push(options);
+        },
+      },
       runtime: {
         id: "extension-id",
         onMessage: {
@@ -191,8 +197,49 @@ function installSuccessfulUploadFetch(runtime, info = uploadInfo()) {
   };
 }
 
-// Demand 3 remains isolated to its fixed page, endpoint and current login session.
+// Demand 3 remains isolated to its fixed page, endpoint, tab and current login session.
 const tool3Runtime = createRuntime();
+const imageReadEnabled = await send(
+  tool3Runtime,
+  { type: "ENABLE_TOOL3_IMAGE_READ" },
+  tool3Sender,
+);
+assert.equal(imageReadEnabled.result.ok, true);
+assert.equal(tool3Runtime.state.sessionRuleCalls.length, 1);
+const imageReadRule = JSON.parse(
+  JSON.stringify(tool3Runtime.state.sessionRuleCalls[0].addRules[0]),
+);
+assert.deepEqual(imageReadRule.condition.tabIds, [tool3Sender.tab.id]);
+assert.deepEqual(imageReadRule.condition.initiatorDomains, ["via-life.github.io"]);
+assert.deepEqual(imageReadRule.condition.requestMethods, ["get"]);
+assert.deepEqual(imageReadRule.condition.resourceTypes, ["xmlhttprequest"]);
+assert.equal(
+  imageReadRule.condition.urlFilter,
+  "|https://hunyuan.tencent.com/api/resource/download?resourceId=",
+);
+assert.deepEqual(imageReadRule.action.responseHeaders, [
+  {
+    header: "Access-Control-Allow-Origin",
+    operation: "set",
+    value: "https://via-life.github.io",
+  },
+  {
+    header: "Access-Control-Allow-Credentials",
+    operation: "set",
+    value: "true",
+  },
+]);
+const imageReadDisabled = await send(
+  tool3Runtime,
+  { type: "DISABLE_TOOL3_IMAGE_READ" },
+  tool3Sender,
+);
+assert.equal(imageReadDisabled.result.ok, true);
+assert.deepEqual(
+  Array.from(tool3Runtime.state.sessionRuleCalls[1].removeRuleIds),
+  [8],
+);
+
 const rejectedSender = await send(
   tool3Runtime,
   { type: "FETCH_HUNYUAN_IMAGE", resourceId: "valid_id_123" },

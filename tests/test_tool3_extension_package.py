@@ -37,6 +37,10 @@ class Tool3ExtensionManifestTests(unittest.TestCase):
             },
         )
         self.assertNotIn("cookies", self.manifest.get("permissions", []))
+        self.assertEqual(
+            self.manifest.get("permissions", []),
+            ["declarativeNetRequestWithHostAccess"],
+        )
 
     def test_content_script_is_limited_to_production_tool1_and_tool3(self) -> None:
         self.assertEqual(
@@ -82,6 +86,12 @@ class Tool3ExtensionSourceSafetyTests(unittest.TestCase):
         )
         self.assertNotIn("message.url", self.background)
         self.assertNotIn("chrome.cookies", self.background)
+        self.assertIn("updateSessionRules", self.background)
+        self.assertIn("tabIds: [tabId]", self.background)
+        self.assertIn(
+            '"|https://hunyuan.tencent.com/api/resource/download?resourceId="',
+            self.background,
+        )
 
     def test_background_requires_login_session_without_exposing_cookies(self) -> None:
         self.assertIn('credentials: "include"', self.background)

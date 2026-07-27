@@ -23,6 +23,7 @@ const COS_REGION = "ap-guangzhou";
 const COS_HOST_SUFFIX = ".cos-internal.ap-guangzhou.tencentcos.cn";
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_BASE64_LENGTH = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 4;
+const TOOL3_CORS_RULE_ID_OFFSET = 1;
 const REQUEST_TIMEOUT_MS = 30_000;
 const COS_TIMEOUT_MS = 60_000;
 const RESOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{8,160}$/u;
@@ -111,6 +112,57 @@ function arrayBufferToBase64(buffer) {
     );
   }
   return btoa(chunks.join(""));
+}
+
+function tool3ImageRuleId(tabId) {
+  return tabId + TOOL3_CORS_RULE_ID_OFFSET;
+}
+
+async function enableTool3ImageRead(tabId) {
+  if (!Number.isInteger(tabId) || tabId < 0) {
+    return errorResult("INVALID_REQUEST", "扩展无法识别当前需求三标签页。");
+  }
+  const ruleId = tool3ImageRuleId(tabId);
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [ruleId],
+    addRules: [
+      {
+        id: ruleId,
+        priority: 1,
+        action: {
+          type: "modifyHeaders",
+          responseHeaders: [
+            {
+              header: "Access-Control-Allow-Origin",
+              operation: "set",
+              value: ALLOWED_PAGE_ORIGIN,
+            },
+            {
+              header: "Access-Control-Allow-Credentials",
+              operation: "set",
+              value: "true",
+            },
+          ],
+        },
+        condition: {
+          urlFilter:
+            "|https://hunyuan.tencent.com/api/resource/download?resourceId=",
+          initiatorDomains: ["via-life.github.io"],
+          requestMethods: ["get"],
+          resourceTypes: ["xmlhttprequest"],
+          tabIds: [tabId],
+        },
+      },
+    ],
+  });
+  return { ok: true };
+}
+
+async function disableTool3ImageRead(tabId) {
+  if (!Number.isInteger(tabId) || tabId < 0) return;
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [tool3ImageRuleId(tabId)],
+  });
 }
 
 async function fetchHunyuanImage(resourceId) {
@@ -563,11 +615,33 @@ async function uploadTool1Image(message) {
   return { ok: true, url: uploadInfo.resourceUrl };
 }
 
+if (chrome.tabs && chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    disableTool3ImageRead(tabId).catch(() => {});
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const pagePath = getAllowedSenderPath(sender);
   if (!pagePath) return false;
 
   if (pagePath === TOOL3_PAGE_PATH) {
+    if (message && message.type === "ENABLE_TOOL3_IMAGE_READ") {
+      enableTool3ImageRead(sender.tab && sender.tab.id)
+        .then(sendResponse)
+        .catch(() => {
+          sendResponse(
+            errorResult("EXTENSION_ERROR", "扩展无法启用当前标签页的图片读取。"),
+          );
+        });
+      return true;
+    }
+    if (message && message.type === "DISABLE_TOOL3_IMAGE_READ") {
+      disableTool3ImageRead(sender.tab && sender.tab.id)
+        .then(() => sendResponse({ ok: true }))
+        .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
     if (
       !message ||
       message.type !== "FETCH_HUNYUAN_IMAGE" ||

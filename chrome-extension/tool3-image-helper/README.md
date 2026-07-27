@@ -28,7 +28,7 @@ python scripts/build_private_extension.py
 4. 点击“加载已解压的扩展程序”，选择解压目录。
 5. 刷新对应的 iTools 页面。
 
-Chrome 不允许普通网页静默安装扩展，因此首次安装和凭据轮换后的重新加载需要手动完成。
+升级到 2.1.0 或更高版本时，请覆盖旧解压目录，并在 `chrome://extensions/` 点击该扩展的「重新加载」。Chrome 不允许普通网页静默安装扩展，因此首次安装、版本升级和凭据轮换后的重新加载需要手动完成。
 
 ## 权限范围
 
@@ -44,7 +44,7 @@ Chrome 不允许普通网页静默安装扩展，因此首次安装和凭据轮�
 - `https://yuanbao.tencent.com/*`
 - `https://*.cos-internal.ap-guangzhou.tencentcos.cn/*`
 
-后台不接受页面传入的 URL、接口地址或 host。需求一只调用固定的 `genUploadInfo` 接口；腾讯云 COS JavaScript SDK只用于 `COS.getAuthorization` 签名，实际图片 PUT 使用 Service Worker 原生 `fetch` 发往固定广州内网 COS 后缀。
+后台不接受页面传入的 URL、接口地址或 host。需求一只调用固定的 `genUploadInfo` 接口；腾讯云 COS JavaScript SDK只用于 `COS.getAuthorization` 签名，实际图片 PUT 使用 Service Worker 原生 `fetch` 发往固定广州内网 COS 后缀。需求三仅在当前工具三标签页存活期间，为固定的元宝图片下载端点补充可读响应头；规则按标签页限制，离开或关闭页面后撤销。
 
 ## 凭据文件
 

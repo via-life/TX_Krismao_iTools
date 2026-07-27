@@ -460,6 +460,33 @@
     return row;
   }
 
+  function createRowIndex(sheetData) {
+    var ordered = getElements(sheetData, 'row');
+    var byNumber = Object.create(null);
+    ordered.forEach(function (row) {
+      byNumber[Number(row.getAttribute('r'))] = row;
+    });
+    return { ordered: ordered, byNumber: byNumber };
+  }
+
+  function findOrCreateIndexedRow(sheetDocument, sheetData, rowNumber, rowIndex) {
+    if (rowIndex.byNumber[rowNumber]) return rowIndex.byNumber[rowNumber];
+    var low = 0;
+    var high = rowIndex.ordered.length;
+    while (low < high) {
+      var middle = Math.floor((low + high) / 2);
+      var current = Number(rowIndex.ordered[middle].getAttribute('r'));
+      if (current < rowNumber) low = middle + 1;
+      else high = middle;
+    }
+    var row = sheetDocument.createElementNS(MAIN_NS, 'row');
+    row.setAttribute('r', String(rowNumber));
+    sheetData.insertBefore(row, rowIndex.ordered[low] || null);
+    rowIndex.ordered.splice(low, 0, row);
+    rowIndex.byNumber[rowNumber] = row;
+    return row;
+  }
+
   function appendCell(row, cell, targetColumn) {
     var cells = getElements(row, 'c');
     for (var i = 0; i < cells.length; i++) {
@@ -770,6 +797,16 @@
     return directory + '/image' + number + '.png';
   }
 
+  function createMediaPathAllocator(zip, drawingPath) {
+    var directory = drawingPath.split('/').slice(0, -1).concat('media').join('/');
+    var number = 1;
+    while (zip.files[directory + '/image' + number + '.png']) number++;
+    return function () {
+      while (zip.files[directory + '/image' + number + '.png']) number++;
+      return directory + '/image' + (number++) + '.png';
+    };
+  }
+
   function nextPictureId(drawingDocument) {
     return getElements(drawingDocument, 'cNvPr').reduce(function (maximum, element) {
       return Math.max(maximum, Number(element.getAttribute('id')) || 0);
@@ -827,14 +864,28 @@
     drawingDocument.documentElement.appendChild(anchor);
   }
 
-  function appendImageRelationship(drawingRelsDocument, target) {
+  function appendImageRelationship(drawingRelsDocument, target, relationshipId) {
     var relationship = drawingRelsDocument.createElementNS(PACKAGE_REL_NS, 'Relationship');
-    var relationshipId = nextRelationshipId(drawingRelsDocument);
+    relationshipId = relationshipId || nextRelationshipId(drawingRelsDocument);
     relationship.setAttribute('Id', relationshipId);
     relationship.setAttribute('Type', IMAGE_REL_TYPE);
     relationship.setAttribute('Target', target);
     drawingRelsDocument.documentElement.appendChild(relationship);
     return relationshipId;
+  }
+
+  function createRelationshipIdAllocator(relsDocument) {
+    var used = Object.create(null);
+    getElements(relsDocument, 'Relationship').forEach(function (relationship) {
+      used[relationship.getAttribute('Id')] = true;
+    });
+    var number = 1;
+    return function () {
+      while (used['rId' + number]) number++;
+      var relationshipId = 'rId' + number++;
+      used[relationshipId] = true;
+      return relationshipId;
+    };
   }
 
   async function ensureContentTypes(zip, drawingPath) {
@@ -898,11 +949,12 @@
     }, 1);
     var newMaxRow = Math.max(bounds.maxRow, maxWrittenRow);
 
-    var headerRow = findOrCreateRow(sheetDocument, sheetData, 1);
+    var rowIndex = createRowIndex(sheetData);
+    var headerRow = findOrCreateIndexedRow(sheetDocument, sheetData, 1, rowIndex);
     var headerCell = createInlineStringCell(sheetDocument, newColumnName + '1', 'png');
     appendCell(headerRow, inheritLeftStyle(headerRow, headerCell, newColumn), newColumn);
     pairs.forEach(function (pair) {
-      var row = findOrCreateRow(sheetDocument, sheetData, pair.row);
+      var row = findOrCreateIndexedRow(sheetDocument, sheetData, pair.row, rowIndex);
       var cell = createBlankCell(sheetDocument, newColumnName + pair.row);
       appendCell(row, inheritLeftStyle(row, cell, newColumn), newColumn);
       setImageRowHeight(row, pair);
@@ -915,11 +967,18 @@
 
     var drawingParts = await ensureDrawingParts(zip, sheetDocument, sheetPath);
     var pictureId = nextPictureId(drawingParts.drawingDocument);
+    var nextMedia = createMediaPathAllocator(zip, drawingParts.drawingPath);
+    var nextImageRelationshipId =
+      createRelationshipIdAllocator(drawingParts.drawingRelsDocument);
     pairs.forEach(function (pair) {
-      var mediaPath = nextMediaPath(zip, drawingParts.drawingPath);
+      var mediaPath = nextMedia();
       var target = relativePartTarget(drawingParts.drawingPath, mediaPath);
-      var relationshipId = appendImageRelationship(drawingParts.drawingRelsDocument, target);
-      zip.file(mediaPath, pair.bytes);
+      var relationshipId = appendImageRelationship(
+        drawingParts.drawingRelsDocument,
+        target,
+        nextImageRelationshipId()
+      );
+      zip.file(mediaPath, pair.bytes, { binary: true, compression: 'STORE' });
       appendPictureAnchor(drawingParts.drawingDocument, newColumn, pair, relationshipId, pictureId++);
     });
 
@@ -944,7 +1003,8 @@
       type: 'blob',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       compression: 'DEFLATE',
-      compressionOptions: { level: 6 }
+      compressionOptions: { level: 3 },
+      streamFiles: true
     });
     return output;
   }

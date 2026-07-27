@@ -116,6 +116,10 @@ class Tool1ExtensionSecurityTests(unittest.TestCase):
             len(EXPECTED_HOST_PERMISSIONS),
         )
         self.assertNotIn("cookies", self.manifest.get("permissions", []))
+        self.assertEqual(
+            self.manifest.get("permissions", []),
+            ["declarativeNetRequestWithHostAccess"],
+        )
 
     def test_content_scripts_only_match_github_pages_tool1_and_tool3(self) -> None:
         content_scripts = self.manifest.get("content_scripts", [])

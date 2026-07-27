@@ -28,6 +28,7 @@
   };
   var DIRECT_IMAGE_TIMEOUT_MS = 8000;
   var IMAGE_HELPER_TIMEOUT_MS = 35000;
+  var MAX_PENDING_PNG_ENCODINGS = 3;
   var el = {};
 
   [
@@ -300,10 +301,20 @@
     });
   }
 
-  function show(index) {
+  function markSessionGenerated(index) {
+    var item = el['sess-list'].children[index];
+    if (!item || item.classList.contains('is-done')) return;
+    item.classList.add('is-done');
+    var meta = item.querySelector('.sess-item__meta');
+    if (meta) meta.textContent += ' · 已生成 PNG';
+  }
+
+  function show(index, captureMode) {
+    var previous = state.active;
     state.active = index;
     var items = el['sess-list'].children;
-    for (var i = 0; i < items.length; i++) items[i].classList.toggle('is-active', i === index);
+    if (previous !== index && items[previous]) items[previous].classList.remove('is-active');
+    if (items[index]) items[index].classList.add('is-active');
     var session = state.sessions[index];
     el['main-title'].textContent = 'session: ' + session.cid;
     el['main-sub'].textContent =
@@ -314,7 +325,7 @@
       }).join(' · ');
     el['render-scroll'].innerHTML = buildShot(session);
     el['render-scroll'].scrollTop = 0;
-    bindPreviewImages(el['render-scroll']);
+    if (!captureMode) bindPreviewImages(el['render-scroll']);
     return Promise.resolve();
   }
 
@@ -619,17 +630,28 @@
     });
   }
 
+  function isCurrentImageHelperVersion(value) {
+    var match = /^(\d+)\.(\d+)\.(\d+)/.exec(String(value || ''));
+    if (!match) return false;
+    var parts = match.slice(1).map(Number);
+    return parts[0] > 2 ||
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 0)));
+  }
+
   function updateImageHelperStatus(stateName, version) {
     var connected = stateName === 'connected';
     imageHelper.connected = connected;
     if (connected) imageHelper.version = String(version || '未知');
-    el['img-helper-status'].className = 't3-helper-status is-' + stateName;
-    el['img-helper-status'].textContent = connected ?
-      'Chrome 图片助手已连接。' :
-      (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
-        '未检测到 Chrome 图片助手，请按下方步骤安装。');
-    el['img-helper-install'].hidden = connected || stateName === 'checking';
-    el['img-helper-connected'].hidden = !connected;
+    var outdated = connected && !isCurrentImageHelperVersion(imageHelper.version);
+    el['img-helper-status'].className = 't3-helper-status is-' +
+      (outdated ? 'missing' : stateName);
+    el['img-helper-status'].textContent = outdated ?
+      'Chrome 图片助手版本过旧，请重新下载 2.1.0 或更高版本并在扩展页重新加载。' :
+      (connected ? 'Chrome 图片助手已连接。' :
+        (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
+          '未检测到 Chrome 图片助手，请按下方步骤安装。'));
+    el['img-helper-install'].hidden = (connected && !outdated) || stateName === 'checking';
+    el['img-helper-connected'].hidden = !connected || outdated;
     if (connected) el['img-helper-version'].textContent = imageHelper.version;
   }
 
@@ -762,7 +784,9 @@
       controller.abort();
     }, DIRECT_IMAGE_TIMEOUT_MS);
     return fetch(url, {
+      cache: 'no-store',
       credentials: 'include',
+      referrerPolicy: 'no-referrer',
       signal: controller.signal
     }).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -832,27 +856,50 @@
     }));
   }
 
+  function releaseCaptureImages(root) {
+    var seen = {};
+    root.querySelectorAll('.t3-chat-img').forEach(function (image) {
+      var original = image.getAttribute('data-url');
+      if (!original || seen[original]) return;
+      seen[original] = true;
+      var entry = captureImageCache[original];
+      if (entry && entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+      delete captureImageCache[original];
+    });
+  }
+
   function nextPaint() {
     return new Promise(function (resolve) {
       requestAnimationFrame(function () { requestAnimationFrame(resolve); });
     });
   }
 
-  function captureVisibleSession() {
+  function captureVisibleSession(options) {
+    options = options || {};
     var node = document.getElementById('shot');
     if (!node) return Promise.reject(new Error('无渲染内容'));
-    return prepareCaptureImages(node).then(nextPaint).then(function () {
+    return prepareCaptureImages(node).then(function () {
+      return options.skipPaint ? null : nextPaint();
+    }).then(function () {
       return html2canvas(node, {
         backgroundColor: '#faf9f7',
-        scale: 2,
+        scale: options.scale || 2,
         useCORS: false,
         logging: false
       });
+    }).then(function (canvas) {
+      if (options.releaseImages) releaseCaptureImages(node);
+      return canvas;
+    }, function (error) {
+      if (options.releaseImages) releaseCaptureImages(node);
+      throw error;
     });
   }
 
-  function captureSession(index) {
-    return show(index).then(captureVisibleSession);
+  function captureSession(index, options) {
+    return show(index, true).then(function () {
+      return captureVisibleSession(options);
+    });
   }
 
   function canvasToBlob(canvas) {
@@ -922,31 +969,61 @@
     if (state.busy || el['generate-png-excel'].disabled) return;
     var originalActive = state.active;
     var cursor = 0;
+    var completed = state.screenshotPngs.reduce(function (count, png) {
+      return count + (png ? 1 : 0);
+    }, 0);
     setBusy(true);
 
-    function step() {
-      while (cursor < state.sessions.length && state.screenshotPngs[cursor]) cursor++;
-      if (cursor >= state.sessions.length) {
-        setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 png 列…');
-        return downloadPngWorkbook().then(function () {
-          setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。', 'ok');
+    async function run() {
+      var pendingEncodes = [];
+
+      function encodeSession(canvas, index) {
+        return canvasToBlob(canvas).then(function (blob) {
+          return blob.arrayBuffer();
+        }).then(function (buffer) {
+          state.screenshotPngs[index] = new Uint8Array(buffer);
+          completed++;
+          markSessionGenerated(index);
+          return { ok: true, index: index };
+        }).catch(function (error) {
+          return { ok: false, index: index, error: error };
         });
       }
-      var current = cursor;
-      var completed = state.screenshotPngs.filter(Boolean).length;
-      setStatus('正在生成会话 PNG…（' + (completed + 1) + '/' + state.sessions.length + '）');
-      return captureSession(current).then(canvasToBlob).then(function (blob) {
-        state.screenshotPngs[current] = blob;
-        renderList();
-        cursor++;
-        return step();
-      });
+
+      async function settleNextEncode() {
+        var result = await pendingEncodes.shift();
+        if (result.ok) return;
+        await Promise.all(pendingEncodes.splice(0));
+        var failure = new Error(safeErrorMessage(result.error, 'PNG 生成失败'));
+        failure.code = result.error && result.error.code;
+        failure.tool3SessionIndex = result.index;
+        throw failure;
+      }
+
+      for (cursor = 0; cursor < state.sessions.length; cursor++) {
+        if (state.screenshotPngs[cursor]) continue;
+        setStatus('正在生成会话 PNG…（' +
+          (completed + pendingEncodes.length + 1) + '/' + state.sessions.length + '）');
+        var current = cursor;
+        var canvas = await captureSession(current, {
+          scale: 1,
+          releaseImages: true,
+          skipPaint: true
+        });
+        pendingEncodes.push(encodeSession(canvas, current));
+        if (pendingEncodes.length >= MAX_PENDING_PNG_ENCODINGS) await settleNextEncode();
+      }
+      while (pendingEncodes.length) await settleNextEncode();
+      setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 png 列…');
+      await downloadPngWorkbook();
+      setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。', 'ok');
     }
 
-    step().catch(function (error) {
-      var completed = state.screenshotPngs.filter(Boolean).length;
-      var stage = cursor < state.sessions.length ?
-        '第 ' + (cursor + 1) + ' 个会话生成阶段' : 'Excel 写入阶段';
+    run().catch(function (error) {
+      var failedIndex = Number.isInteger(error.tool3SessionIndex) ?
+        error.tool3SessionIndex : cursor;
+      var stage = failedIndex < state.sessions.length ?
+        '第 ' + (failedIndex + 1) + ' 个会话生成阶段' : 'Excel 写入阶段';
       setStatus('处理在' + stage + '停止：' +
         safeErrorMessage(error, 'PNG 生成或写入失败。') + '；已保留 ' + completed +
         ' 张成功 PNG，再次点击会自动跳过。', 'error');
@@ -1024,6 +1101,7 @@
     parseSpreadsheet: parseSpreadsheet,
     outputFilename: outputFilename,
     imageGallery: imageGallery,
-    prepareCaptureImages: prepareCaptureImages
+    prepareCaptureImages: prepareCaptureImages,
+    isCurrentImageHelperVersion: isCurrentImageHelperVersion
   };
 })();
