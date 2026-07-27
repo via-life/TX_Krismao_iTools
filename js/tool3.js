@@ -318,7 +318,7 @@
     if (meta) meta.textContent += ' · 已生成 PNG';
   }
 
-  function show(index, captureMode) {
+  function show(index) {
     var previous = state.active;
     state.active = index;
     var items = el['sess-list'].children;
@@ -334,8 +334,8 @@
       }).join(' · ');
     el['render-scroll'].innerHTML = buildShot(session);
     el['render-scroll'].scrollTop = 0;
-    if (!captureMode) bindPreviewImages(el['render-scroll']);
-    return Promise.resolve();
+    var shot = document.getElementById('shot');
+    return shot ? bindPreviewImages(shot) : Promise.resolve();
   }
 
   function buildShot(session) {
@@ -402,37 +402,39 @@
     }
   }
 
+  function loadPreviewImage(image) {
+    if (image.__tool3ImageReady) return image.__tool3ImageReady;
+    var original = image.getAttribute('data-url');
+    var item = image.closest('.t3-img-item');
+    var link = item.querySelector('.t3-img-item__link');
+    var fallback = item.querySelector('.t3-img-item__fallback');
+    image.__tool3ImageReady = captureImageUrl(original).then(function (localUrl) {
+      return setImageSource(image, localUrl);
+    }).then(function () {
+      link.hidden = false;
+      fallback.hidden = true;
+      fallback.removeAttribute('data-error-code');
+      return true;
+    }).catch(function (error) {
+      showImageFallback(image, error);
+      return false;
+    });
+    return image.__tool3ImageReady;
+  }
+
   function bindPreviewImages(root) {
-    root.querySelectorAll('.t3-chat-img').forEach(function (image) {
+    var images = [].slice.call(root.querySelectorAll('.t3-chat-img'));
+    images.forEach(function (image) {
       var link = image.closest('.t3-img-item__link');
-      var fallback = image.closest('.t3-img-item').querySelector('.t3-img-item__fallback');
-      var original = image.getAttribute('data-url');
-      var assisted = false;
-      image.addEventListener('load', function () {
-        link.hidden = false;
-        fallback.hidden = true;
-        fallback.removeAttribute('data-error-code');
-      });
-      image.addEventListener('error', function () {
-        if (assisted) {
-          showImageFallback(image);
-          return;
-        }
-        assisted = true;
-        captureImageUrl(original).then(function (localUrl) {
-          image.src = localUrl;
-        }).catch(function (error) {
-          showImageFallback(image, error);
-        });
-      });
       link.addEventListener('click', function (event) {
         if (image.naturalWidth > 0) {
           event.preventDefault();
           openLightbox(image.currentSrc || image.src);
         }
       });
-      image.src = original;
     });
+    root.__tool3ImagesReady = Promise.all(images.map(loadPreviewImage));
+    return root.__tool3ImagesReady;
   }
 
   function escape(value) {
@@ -834,15 +836,20 @@
   function captureImageUrl(url) {
     if (captureImageCache[url]) return captureImageCache[url].promise;
     var entry = {};
-    entry.promise = imageBlobFromBrowser(url).catch(function () {
-      return imageBlobFromExtension(url);
-    }).then(function (blob) {
+    var hunyuanWithHelper = !!extractHunyuanResourceId(url) && imageHelper.connected;
+    var blobPromise = hunyuanWithHelper ? imageBlobFromExtension(url) :
+      imageBlobFromBrowser(url).catch(function () {
+        return imageBlobFromExtension(url);
+      });
+    entry.promise = blobPromise.then(function (blob) {
       if (!blob || !blob.size) throw new Error('图片内容为空');
+      if (captureImageCache[url] !== entry) {
+        var cancelled = new Error('图片加载已取消');
+        cancelled.code = 'IMAGE_LOAD_CANCELLED';
+        throw cancelled;
+      }
       entry.objectUrl = URL.createObjectURL(blob);
       return entry.objectUrl;
-    }).catch(function (error) {
-      delete captureImageCache[url];
-      throw error;
     });
     captureImageCache[url] = entry;
     return entry.promise;
@@ -874,19 +881,11 @@
   }
 
   function prepareCaptureImages(root) {
-    var images = [].slice.call(root.querySelectorAll('.t3-chat-img'));
-    return Promise.all(images.map(function (image) {
-      var original = image.getAttribute('data-url');
-      return captureImageUrl(original).then(function (localUrl) {
-        var item = image.closest('.t3-img-item');
-        item.querySelector('.t3-img-item__link').hidden = false;
-        item.querySelector('.t3-img-item__fallback').hidden = true;
-        return setImageSource(image, localUrl);
-      }).catch(function (error) {
-        showImageFallback(image, error);
-        return false;
-      });
-    }));
+    if (root.__tool3ImagesReady) return root.__tool3ImagesReady;
+    root.__tool3ImagesReady = Promise.all(
+      [].slice.call(root.querySelectorAll('.t3-chat-img')).map(loadPreviewImage)
+    );
+    return root.__tool3ImagesReady;
   }
 
   function releaseCaptureImages(root) {
@@ -896,8 +895,10 @@
       if (!original || seen[original]) return;
       seen[original] = true;
       var entry = captureImageCache[original];
-      if (entry && entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
-      delete captureImageCache[original];
+      if (entry && entry.objectUrl) {
+        URL.revokeObjectURL(entry.objectUrl);
+        delete captureImageCache[original];
+      }
     });
   }
 
@@ -930,7 +931,9 @@
   }
 
   function captureSession(index, options) {
-    return show(index, true).then(function () {
+    var current = document.getElementById('shot');
+    var ready = state.active === index && current ? Promise.resolve() : show(index);
+    return ready.then(function () {
       return captureVisibleSession(options);
     });
   }
@@ -974,7 +977,9 @@
       }
       setStatus('正在批量渲染…（' + (index + 1) + '/' + state.sessions.length + '）');
       var current = index;
-      return captureSession(current, { releaseImages: true }).then(canvasToBlob).then(function (blob) {
+      return captureSession(current, {
+        releaseImages: current !== originalActive
+      }).then(canvasToBlob).then(function (blob) {
         zip.file((current + 1) + '_' + safeName(state.sessions[current].cid) + '.png', blob);
         index++;
         return step();
@@ -1040,7 +1045,7 @@
         var current = cursor;
         var canvas = await captureSession(current, {
           scale: 1,
-          releaseImages: true,
+          releaseImages: current !== originalActive,
           skipPaint: true
         });
         pendingEncodes.push(encodeSession(canvas, current));
@@ -1134,6 +1139,7 @@
     parseSpreadsheet: parseSpreadsheet,
     outputFilename: outputFilename,
     imageGallery: imageGallery,
+    bindPreviewImages: bindPreviewImages,
     prepareCaptureImages: prepareCaptureImages,
     isCurrentImageHelperVersion: isCurrentImageHelperVersion
   };

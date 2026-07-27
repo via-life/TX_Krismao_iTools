@@ -92,7 +92,7 @@
           </div>
         </div>
       </div>
-      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。鉴权图片会优先由浏览器直接读取，失败时自动调用上方 Chrome 图片助手；仍无法打开的图片会显示原链接并继续处理。</div>
+      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。鉴权图片会在预览阶段通过 Chrome 图片助手复用当前浏览器登录态并转为本地缓存；导出直接复用当前预览，不会再次请求远端。仍无法打开的图片会显示原链接并继续处理。</div>
     </div>
   </div>
 </div>
