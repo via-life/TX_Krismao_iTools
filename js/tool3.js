@@ -19,6 +19,7 @@
     busy: false
   };
   var captureImageCache = {};
+  var captureFailures = {};
   var imageHelper = {
     connected: false,
     version: '',
@@ -120,6 +121,23 @@
       if (item && item.objectUrl) URL.revokeObjectURL(item.objectUrl);
     });
     captureImageCache = {};
+  }
+
+  function resetCaptureFailures() {
+    captureFailures = {};
+  }
+
+  function captureFailureNote() {
+    var codes = Object.keys(captureFailures).map(function (url) {
+      return captureFailures[url];
+    });
+    if (!codes.length) return '';
+    var missingExtension = codes.some(function (code) {
+      return code === 'EXTENSION_MISSING' || code === 'UNSUPPORTED_IMAGE_URL';
+    });
+    return '（其中 ' + codes.length + ' 张图片未能读取字节，已显示为链接' +
+      (missingExtension ? '；请确认 Chrome 图片助手已连接且图片为受支持地址' : '') +
+      '，详见浏览器控制台日志）';
   }
 
   function resetGeneratedPngs() {
@@ -421,10 +439,13 @@
     image.__tool3CaptureReady = captureImageUrl(original).then(function (localUrl) {
       return setImageSource(image, localUrl);
     }).then(function () {
+      delete captureFailures[original];
       markImageLoaded(item);
       return true;
     }).catch(function (error) {
+      captureFailures[original] = (error && error.code) || 'CAPTURE_ERROR';
       showImageFallback(image, error);
+      image.__tool3CaptureReady = null;
       return false;
     });
     return image.__tool3CaptureReady;
@@ -669,7 +690,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 1)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 2)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -680,7 +701,7 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      'Chrome 图片助手版本过旧，请重新下载 2.1.1 或更高版本并在扩展页重新加载。' :
+      'Chrome 图片助手版本过旧，请从本地插件交付目录安装 2.1.2 或更高版本并在扩展页重新加载。' :
       (connected ? 'Chrome 图片助手已连接。' :
         (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
           '未检测到 Chrome 图片助手，请按下方步骤安装。'));
@@ -859,8 +880,19 @@
   function captureImageUrl(url) {
     if (captureImageCache[url]) return captureImageCache[url].promise;
     var entry = {};
-    var blobPromise = imageBlobFromBrowser(url).catch(function () {
-      return imageBlobFromExtension(url);
+    var blobPromise = imageBlobFromBrowser(url).catch(function (browserError) {
+      return imageBlobFromExtension(url).catch(function (extensionError) {
+        // 两条取字节的路径都失败时，把双方原因都打到控制台，方便定位导出为何显示成链接。
+        if (window.console && console.warn) {
+          console.warn(
+            '[tool3] 导出无法获取图片字节：' + url +
+            '\n  页面直取失败：' + safeErrorMessage(browserError, String(browserError)) +
+            '\n  扩展读取失败：' + ((extensionError && extensionError.code) || '') + ' ' +
+            safeErrorMessage(extensionError, String(extensionError))
+          );
+        }
+        throw extensionError;
+      });
     });
     entry.promise = blobPromise.then(function (blob) {
       if (!blob || !blob.size) throw new Error('图片内容为空');
@@ -871,6 +903,10 @@
       }
       entry.objectUrl = URL.createObjectURL(blob);
       return entry.objectUrl;
+    }).catch(function (error) {
+      // 失败不缓存，避免扩展尚未连上等瞬时失败永久毒化后续导出（再次点击可重试）。
+      if (captureImageCache[url] === entry) delete captureImageCache[url];
+      throw error;
     });
     captureImageCache[url] = entry;
     return entry.promise;
@@ -903,9 +939,18 @@
 
   function prepareCaptureImages(root) {
     if (root.__tool3CaptureReady) return root.__tool3CaptureReady;
-    root.__tool3CaptureReady = Promise.all(
+    var ready = Promise.all(
       [].slice.call(root.querySelectorAll('.t3-chat-img')).map(loadCaptureImage)
     );
+    root.__tool3CaptureReady = ready.then(function (results) {
+      if (results.some(function (loaded) { return loaded === false; })) {
+        root.__tool3CaptureReady = null;
+      }
+      return results;
+    }, function (error) {
+      root.__tool3CaptureReady = null;
+      throw error;
+    });
     return root.__tool3CaptureReady;
   }
 
@@ -972,10 +1017,12 @@
     if (state.active < 0 || state.busy) return;
     var index = state.active;
     setBusy(true);
+    resetCaptureFailures();
     setStatus('正在加载图片并生成当前会话 PNG…');
     captureSession(index).then(canvasToBlob).then(function (blob) {
       T.downloadBlob('session_' + safeName(state.sessions[index].cid) + '.png', blob);
-      setStatus('已导出当前会话 PNG。', 'ok');
+      var note = captureFailureNote();
+      setStatus('已导出当前会话 PNG。' + note, note ? 'error' : 'ok');
     }).catch(function (error) {
       setStatus('导出失败：' + safeErrorMessage(error, '无法生成截图。'), 'error');
     }).then(function () {
@@ -989,11 +1036,14 @@
     var originalActive = state.active;
     var index = 0;
     setBusy(true);
+    resetCaptureFailures();
     function step() {
       if (index >= state.sessions.length) {
         return zip.generateAsync({ type: 'blob' }).then(function (blob) {
           T.downloadBlob('sessions_png.zip', blob);
-          setStatus('已导出全部 ' + state.sessions.length + ' 张 PNG（zip）。', 'ok');
+          var note = captureFailureNote();
+          setStatus('已导出全部 ' + state.sessions.length + ' 张 PNG（zip）。' + note,
+            note ? 'error' : 'ok');
         });
       }
       setStatus('正在批量渲染…（' + (index + 1) + '/' + state.sessions.length + '）');
@@ -1032,6 +1082,7 @@
       return count + (png ? 1 : 0);
     }, 0);
     setBusy(true);
+    resetCaptureFailures();
 
     async function run() {
       var pendingEncodes = [];
@@ -1075,7 +1126,9 @@
       while (pendingEncodes.length) await settleNextEncode();
       setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 png 列…');
       await downloadPngWorkbook();
-      setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。', 'ok');
+      var note = captureFailureNote();
+      setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。' + note,
+        note ? 'error' : 'ok');
     }
 
     run().catch(function (error) {

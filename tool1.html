@@ -26,13 +26,13 @@
         <summary>Chrome 上传助手（使用当前浏览器的内网能力）</summary>
         <div class="t1-helper-status is-checking" id="upload-helper-status" role="status">正在检测 Chrome 上传助手…</div>
         <div class="t1-helper-install" id="upload-helper-install" hidden>
-          <p><strong>需求一请先向管理员获取“本机私有扩展 ZIP”</strong>，其中包含对应环境的本机配置。首次使用需要手动安装一次：</p>
+          <p><strong>需求一请使用“本地插件交付”目录中的 2.1.2 私有扩展</strong>，其中包含对应环境的本机配置。首次使用需要手动安装一次：</p>
           <ol>
-            <li>将管理员提供的本机私有 ZIP 解压到固定文件夹。</li>
+            <li>打开本地交付目录中的 <code>iTools浏览器助手-v2.1.2</code> 文件夹；也可先解压同目录的版本化私有 ZIP。</li>
             <li>复制 <code>chrome://extensions</code> 到地址栏打开，开启“开发者模式”。</li>
             <li>点击“加载已解压的扩展程序”，选择刚才解压的文件夹，然后刷新本页。</li>
           </ol>
-          <p class="t1-helper-note">现有<a class="t1-helper-download" href="downloads/itools-tool3-image-helper.zip" download>公开图片助手 ZIP（仅需求三）</a>不含上传凭据，<strong>不能启用需求一</strong>。没有私有包时，请从“启动.bat”进入。</p>
+          <p class="t1-helper-note">插件、构建脚本和凭据只在本地交付，不通过本网页下载。没有私有包时，请使用本地交付中的“需求一本地回退”。</p>
           <button class="btn btn--ghost btn--sm" id="copy-extensions-url" type="button">复制 chrome://extensions</button>
         </div>
         <div class="t1-helper-connected" id="upload-helper-connected" hidden>
@@ -43,7 +43,7 @@
       <div class="dropzone glass" id="dropzone">
         <div class="dropzone__icon">🖼️</div>
         <div class="dropzone__title">将 .xlsx 拖到此处，或点击选择</div>
-        <div class="dropzone__desc">在浏览器本地解压 xlsx，按图片锚点提取每张嵌入图及其所在单元格，再通过 Chrome 上传助手（本地页面可回退到本地服务）逐图上传并写回链接</div>
+        <div class="dropzone__desc">在浏览器本地解压 xlsx，按图片锚点提取每张嵌入图及其所在单元格，再通过本地安装的 Chrome 上传助手逐图上传并写回链接</div>
         <button class="btn btn--primary" id="pick-btn" type="button">选择文件</button>
         <input id="file-input" type="file" accept=".xlsx" hidden />
         <div class="dropzone__file" id="file-name" hidden></div>

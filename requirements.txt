@@ -1,2 +1,0 @@
-requests==2.33.1
-cos-python-sdk-v5==1.9.41

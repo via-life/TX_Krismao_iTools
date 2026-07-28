@@ -17,7 +17,7 @@
         <p class="brand__subtitle">拉题作业流水线 · 浏览器本地处理 · Chrome 助手内网上传</p>
       </div>
     </div>
-    <p class="hub__desc">把 itools 平台的四个脚本搬进浏览器：图片转链接、数据聚合、多轮渲染、tlabel 格式转换。需求一与需求三共用 iTools Chrome 助手：本机生成的私有包支持线上测试/正式上传，公开无凭据包仅支持需求三读取受保护图片；需求一仍可回退到只监听 127.0.0.1 的本地服务。</p>
+    <p class="hub__desc">把 itools 平台的四个脚本搬进浏览器：图片转链接、数据聚合、多轮渲染、tlabel 格式转换。需求一与需求三共用本地交付的 iTools Chrome 助手：需求一访问内网上传能力，需求三读取受保护图片并生成包含真实图片的 PNG。</p>
 
     <div class="tool-grid">
       <a class="tool-card glass" href="tool1.html">
@@ -28,7 +28,7 @@
             <div class="tool-card__title">Excel 图片转 URL</div>
           </div>
         </div>
-        <div class="tool-card__desc">上传含内嵌图片的 xlsx，选择测试或正式环境即可一键转为内部链接并写回表格。线上使用本机私有 Chrome 助手；无法安装扩展时可从“启动.bat”进入本地回退模式。</div>
+        <div class="tool-card__desc">上传含内嵌图片的 xlsx，选择测试或正式环境即可一键转为内部链接并写回表格。线上使用本地安装的私有 Chrome 助手；本地交付另含“启动.bat”回退包。</div>
         <div class="tool-card__meta">私有助手 / 测试与正式 / 本地回退 <span class="tool-card__go">打开 →</span></div>
       </a>
 
@@ -70,7 +70,7 @@
     </div>
 
     <div class="hub__footer">
-      四个工具均可从 GitHub Pages 打开 · 需求一需本机私有助手 · 公开 ZIP 仅支持需求三 · 127.0.0.1 保留回退
+      四个工具均可从 GitHub Pages 打开 · 需求一与需求三需安装本地私有助手 · 127.0.0.1 回退仅随本地交付提供
     </div>
   </div>
 </div>

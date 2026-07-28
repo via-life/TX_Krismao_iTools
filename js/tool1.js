@@ -110,22 +110,22 @@
       el['service-notice'].hidden = true;
       setStatus(el['env-hint'], 'Chrome 助手未就绪，已回退到本地上传服务；' + envLabel(mode) + '配置就绪。', 'ok');
     } else if (uploadHelper.connected && !uploadHelper.capabilities.tool1UploadReady) {
-      setStatus(el['env-hint'], 'Chrome 助手已连接，但当前安装包未配置需求一上传。请安装管理员提供的本机私有扩展包，或从“启动.bat”进入。', 'warn');
+      setStatus(el['env-hint'], 'Chrome 助手已连接，但当前安装包未配置需求一上传。请安装“本地插件交付”目录中的 2.1.2 私有扩展，或使用其中的“需求一本地回退”。', 'warn');
     } else if (uploadHelper.connected) {
       setStatus(el['env-hint'], 'Chrome 助手已连接，但' + envLabel(mode) + '凭据未就绪。请更新本机私有扩展包或切换环境。', 'warn');
     } else if (uploadHelper.status === 'checking' || (service.allowed && !service.checked)) {
       setStatus(el['env-hint'], '正在检测 Chrome 上传助手和可用上传通道…');
     } else if (service.allowed && service.failed) {
-      setStatus(el['env-hint'], 'Chrome 助手与本地上传服务均不可用。请确认扩展已启用，或重新双击“启动.bat”。', 'error');
+      setStatus(el['env-hint'], 'Chrome 助手与本地上传服务均不可用。请确认 2.1.2 私有扩展已启用，或使用本地交付中的“需求一本地回退”。', 'error');
     } else if (service.allowed) {
       setStatus(el['env-hint'], envLabel(mode) + '配置未就绪。请更新 Chrome 私有扩展包，或检查 config.local.json。', 'error');
     } else {
-      setStatus(el['env-hint'], '网页上传需要 Chrome 上传助手。请按上方步骤安装；需求一还需管理员提供的本机私有配置。', 'warn');
+      setStatus(el['env-hint'], '网页上传需要 Chrome 上传助手。请按上方步骤安装；需求一还需本地插件交付中的本机私有配置。', 'warn');
     }
     if (!service.allowed && !helperEnvReady(mode)) {
       setStatus(el['service-notice'], helperPageSupported() ?
         '当前为 GitHub Pages 模式：需求一只能通过已配置的 Chrome 私有上传助手使用内网能力，不会连接 127.0.0.1。' :
-        '当前页面来源不能使用 Chrome 上传助手。请打开 GitHub Pages，或从“启动.bat”进入。', 'warn');
+        '当前页面来源不能使用 Chrome 上传助手。请打开 GitHub Pages，或使用本地交付中的“需求一本地回退”。', 'warn');
     }
     updateUploadButton();
   }
@@ -144,9 +144,9 @@
     } else if (status === 'local') {
       el['upload-helper-status'].textContent = '当前为 127.0.0.1 本地页面，将使用本地上传服务，无需 Chrome 助手。';
     } else if (status === 'unsupported') {
-      el['upload-helper-status'].textContent = '当前页面来源不受 Chrome 助手支持。请打开 GitHub Pages，或从“启动.bat”进入。';
+      el['upload-helper-status'].textContent = '当前页面来源不受 Chrome 助手支持。请打开 GitHub Pages，或使用本地交付中的“需求一本地回退”。';
     } else {
-      el['upload-helper-status'].textContent = '未检测到可用于需求一的 Chrome 上传助手，请安装管理员提供的本机私有扩展包。';
+      el['upload-helper-status'].textContent = '未检测到可用于需求一的 Chrome 上传助手，请安装“本地插件交付”目录中的 2.1.2 私有扩展。';
     }
     el['upload-helper-install'].hidden = uploadHelper.connected || status === 'checking' || status === 'local' || status === 'unsupported';
     el['upload-helper-connected'].hidden = !uploadHelper.connected;
@@ -155,7 +155,7 @@
       el['upload-helper-capabilities'].textContent = ready ?
         ('测试环境：' + (uploadHelper.capabilities.testReady ? '已就绪' : '未配置') +
          '；正式环境：' + (uploadHelper.capabilities.prodReady ? '已就绪' : '未配置')) :
-        '当前为公开无凭据包；需求一请使用管理员提供的本机私有扩展包。';
+        '当前安装包未包含需求一配置；请使用本地插件交付中的 2.1.2 私有扩展。';
     }
     applyEnv();
   }
@@ -196,7 +196,7 @@
     }).catch(function () {
       service.checked = false;
       service.failed = true;
-      setStatus(el['service-notice'], '未连接到需求一本地上传服务。请关闭当前静态服务器后双击“启动.bat”，不要使用 python -m http.server。', 'error');
+      setStatus(el['service-notice'], '未连接到需求一本地上传服务。请使用本地交付中的“需求一本地回退”，不要使用 python -m http.server。', 'error');
       applyEnv();
     });
   }
