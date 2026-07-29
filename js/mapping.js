@@ -28,6 +28,15 @@
       if (f.multi) {
         var cols = [];
         if (f.prefixes) cols = T.matchIndexedColumns(headers, f.prefixes);
+        if (!cols.length && f.matchPrefixes) {
+          var normalizedPrefixes = f.matchPrefixes.map(T.normalize);
+          cols = headers.filter(function (header) {
+            var normalizedHeader = T.normalize(header);
+            return normalizedPrefixes.some(function (prefix) {
+              return normalizedHeader.indexOf(prefix) === 0;
+            });
+          });
+        }
         if (!cols.length && f.aliases) {
           headers.forEach(function (h) {
             var n = T.normalize(h);

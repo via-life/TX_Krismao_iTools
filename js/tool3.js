@@ -16,6 +16,7 @@
     file: null,
     fileBuffer: null,
     screenshotPngs: [],
+    outputColumns: [],
     busy: false
   };
   var captureImageCache = {};
@@ -49,7 +50,7 @@
   [
     'dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'render-section',
     'sess-list', 'sess-count', 'main-title', 'main-sub', 'render-scroll',
-    'export-one', 'export-all', 'generate-png-excel', 'remap-btn', 'dual-toggle',
+    'export-one', 'export-all', 'generate-png-excel', 'remap-btn', 'dual-toggle', 'multi-toggle',
     'lightbox', 'lb-img', 'lb-stage', 'img-reload', 'img-helper-status',
     'img-helper-install', 'img-helper-connected', 'img-helper-version',
     'copy-extensions-url'
@@ -57,7 +58,34 @@
     el[id] = document.getElementById(id);
   });
 
-  function buildFields(isDual) {
+  function buildFields(isDual, isMulti) {
+    if (isMulti) {
+      return [
+        {
+          key: 'messages_columns',
+          label: '对话列（可多选）',
+          required: true,
+          multi: true,
+          desc: '每个选中列单独生成 PNG 列',
+          matchPrefixes: ['answer_'],
+          aliases: ['session_answer', 'session_anwser', 'messages', 'conversation', '对话', 'response']
+        },
+        {
+          key: 'cid',
+          label: 'session 标识列',
+          required: false,
+          desc: 'cid / session_id',
+          aliases: ['cid', 'session_id', 'session', 'sessionid']
+        },
+        {
+          key: 'trace_id',
+          label: '默认 trace_id 列',
+          required: false,
+          desc: '未找到同名 trace 列时使用',
+          aliases: ['trace_id', 'traceid']
+        }
+      ];
+    }
     var fields = [
       {
         key: 'messages_1',
@@ -98,6 +126,14 @@
 
   function dual() {
     return !!el['dual-toggle'].checked;
+  }
+
+  function multi() {
+    return !!el['multi-toggle'].checked;
+  }
+
+  function currentFields() {
+    return buildFields(dual(), multi());
   }
 
   function setStatus(message, kind) {
@@ -231,7 +267,7 @@
   function setBusy(on) {
     state.busy = !!on;
     [
-      el['pick-btn'], el['dual-toggle'], el['remap-btn'], el['export-one'],
+      el['pick-btn'], el['dual-toggle'], el['multi-toggle'], el['remap-btn'], el['export-one'],
       el['export-all'], el['img-reload']
     ].forEach(function (node) {
       if (node) node.disabled = state.busy;
@@ -243,6 +279,12 @@
     var isXlsx = state.file && /\.xlsx$/i.test(state.file.name);
     el['generate-png-excel'].disabled =
       state.busy || !isXlsx || !state.sessions.length;
+    if (state.outputColumns.length > 1) {
+      el['generate-png-excel'].textContent =
+        '生成 ' + state.outputColumns.length + ' 列内嵌 PNG Excel';
+    } else {
+      el['generate-png-excel'].textContent = '生成内嵌 PNG Excel';
+    }
   }
 
   function parseSpreadsheet(buffer) {
@@ -289,6 +331,7 @@
     state.fileBuffer = null;
     state.mapping = null;
     state.sessions = [];
+    state.outputColumns = [];
     state.active = -1;
     state.screenshotPngs = [];
     el['render-section'].hidden = true;
@@ -311,10 +354,11 @@
       el['remap-btn'].hidden = false;
       setStatus('已读取 ' + parsed.rows.length + ' 行，正在识别会话列…');
       Mapping.run({
-        fields: buildFields(dual()),
+        fields: currentFields(),
         headers: parsed.headers,
         title: '会话渲染 · 列映射',
         note: '请选择包含完整多轮会话的列。支持 messages，以及 prompt/answer/convidx 形式。',
+        forceModal: multi(),
         onConfirm: applyMapping
       });
     }).catch(function (error) {
@@ -358,28 +402,74 @@
     };
   }
 
+  function matchingTraceColumn(messagesColumn) {
+    var name = String(messagesColumn || '');
+    var suffix = name.replace(/^answer[_\-\s]*/i, '');
+    var candidates = [
+      'last_trace_id_' + suffix,
+      'trace_id_' + suffix,
+      name + '_trace_id'
+    ].map(T.normalize);
+    for (var index = 0; index < state.headers.length; index++) {
+      if (candidates.indexOf(T.normalize(state.headers[index])) !== -1) {
+        return state.headers[index];
+      }
+    }
+    return null;
+  }
+
   function applyMapping(mapping) {
     state.mapping = mapping;
     var isDual = dual();
-    state.sessions = state.rows.map(function (row, index) {
+    var isMulti = multi();
+    var selectedColumns = isMulti ? (mapping.messages_columns || []) : [];
+    state.outputColumns = isMulti ? selectedColumns.map(function (column) {
+      return { sourceColumn: column, header: column + '_png' };
+    }) : [{ sourceColumn: null, header: 'png' }];
+    state.sessions = [];
+    state.rows.forEach(function (row, index) {
       var cid = mapping.cid ? String(row[mapping.cid] || '').trim() : '';
+      var fallbackCid = cid || ('行 ' + state.sourceRows[index]);
+      if (isMulti) {
+        selectedColumns.forEach(function (column, columnIndex) {
+          var record = messagesToRecord(row[column]);
+          var traceColumn = matchingTraceColumn(column) || mapping.trace_id;
+          var traceId = traceColumn ? String(row[traceColumn] || '').trim() : '';
+          state.sessions.push({
+            idx: index,
+            sourceRow: state.sourceRows[index],
+            cid: fallbackCid,
+            trace_id: traceId || record.trace_id,
+            sourceColumn: column,
+            outputColumnIndex: columnIndex,
+            models: [{ name: column, rec: record }]
+          });
+        });
+        return;
+      }
       var traceId = mapping.trace_id ? String(row[mapping.trace_id] || '').trim() : '';
       var first = messagesToRecord(row[mapping.messages_1]);
       var models = [{ name: isDual ? '模型 1' : '模型', rec: first }];
       if (isDual) models.push({ name: '模型 2', rec: messagesToRecord(row[mapping.messages_2]) });
-      return {
+      state.sessions.push({
         idx: index,
         sourceRow: state.sourceRows[index],
-        cid: cid || ('行 ' + state.sourceRows[index]),
+        cid: fallbackCid,
         trace_id: traceId || first.trace_id,
+        sourceColumn: null,
+        outputColumnIndex: 0,
         models: models
-      };
+      });
     });
     resetGeneratedPngs();
     el['render-section'].hidden = false;
-    el['sess-count'].textContent = '会话（' + state.sessions.length + '）';
+    el['sess-count'].textContent = (isMulti ? '可视化任务（' : '会话（') +
+      state.sessions.length + '）';
     setStatus(
-      '已加载 ' + state.sessions.length + ' 个会话。' +
+      (isMulti ?
+        '已选择 ' + selectedColumns.length + ' 个对话列，共 ' +
+          state.sessions.length + ' 个可视化任务。' :
+        '已加载 ' + state.sessions.length + ' 个会话。') +
       (/\.xlsx$/i.test(state.file.name) ? '' : ' 当前格式仅支持预览/PNG 导出；内嵌 PNG 请使用 .xlsx。'),
       'ok'
     );
@@ -398,6 +488,7 @@
         '" data-index="' + index + '">' +
         '<span class="sess-item__id">' + T.escapeHtml(session.cid) + '</span>' +
         '<span class="sess-item__meta">' +
+        (session.sourceColumn ? T.escapeHtml(session.sourceColumn) + ' · ' : '') +
         (invalid ? '无有效对话' : turns + ' 轮') +
         (generated ? ' · 已生成 PNG' : '') +
         (session.trace_id ? ' · ' + T.escapeHtml(session.trace_id.slice(0, 12)) : '') +
@@ -426,7 +517,8 @@
     if (previous !== index && items[previous]) items[previous].classList.remove('is-active');
     if (items[index]) items[index].classList.add('is-active');
     var session = state.sessions[index];
-    el['main-title'].textContent = 'session: ' + session.cid;
+    el['main-title'].textContent = 'session: ' + session.cid +
+      (session.sourceColumn ? ' · ' + session.sourceColumn : '');
     el['main-sub'].textContent =
       'Excel 第 ' + session.sourceRow + ' 行 · trace_id: ' +
       (session.trace_id || '(无)') + ' · ' +
@@ -1176,7 +1268,9 @@
     resetCaptureFailures();
     setStatus('正在加载图片并生成当前会话 PNG…');
     captureSession(index).then(canvasToBlob).then(function (blob) {
-      T.downloadBlob('session_' + safeName(state.sessions[index].cid) + '.png', blob);
+      var session = state.sessions[index];
+      var columnSuffix = session.sourceColumn ? '_' + safeName(session.sourceColumn) : '';
+      T.downloadBlob('session_' + safeName(session.cid) + columnSuffix + '.png', blob);
       var note = captureFailureNote();
       setStatus('已导出当前会话 PNG。' + note, note ? 'error' : 'ok');
     }).catch(function (error) {
@@ -1207,7 +1301,9 @@
       return captureSession(current, {
         releaseImages: current !== originalActive
       }).then(canvasToBlob).then(function (blob) {
-        zip.file((current + 1) + '_' + safeName(state.sessions[current].cid) + '.png', blob);
+        var session = state.sessions[current];
+        var columnSuffix = session.sourceColumn ? '_' + safeName(session.sourceColumn) : '';
+        zip.file((current + 1) + '_' + safeName(session.cid) + columnSuffix + '.png', blob);
         index++;
         return step();
       });
@@ -1222,10 +1318,15 @@
   }
 
   function downloadPngWorkbook() {
-    var pairs = state.sessions.map(function (session, index) {
-      return { row: session.sourceRow, blob: state.screenshotPngs[index] };
+    var columns = state.outputColumns.map(function (outputColumn, outputColumnIndex) {
+      var pairs = [];
+      state.sessions.forEach(function (session, index) {
+        if (session.outputColumnIndex !== outputColumnIndex) return;
+        pairs.push({ row: session.sourceRow, blob: state.screenshotPngs[index] });
+      });
+      return { header: outputColumn.header, pairs: pairs };
     });
-    return D.appendPngsToWorkbook(state.fileBuffer, pairs).then(function (blob) {
+    return D.appendPngColumnsToWorkbook(state.fileBuffer, columns).then(function (blob) {
       T.downloadBlob(outputFilename(), blob);
     });
   }
@@ -1290,7 +1391,8 @@
         if (pendingEncodes.length >= MAX_PENDING_PNG_ENCODINGS) await settleNextEncode();
       }
       while (pendingEncodes.length) await settleNextEncode();
-      setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 png 列…');
+      setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 ' +
+        state.outputColumns.length + ' 个 PNG 列…');
       workbookStartedAt = Date.now();
       await downloadPngWorkbook();
       var note = captureFailureNote();
@@ -1328,7 +1430,7 @@
   el['remap-btn'].addEventListener('click', function () {
     if (!state.rows.length || state.busy) return;
     Mapping.open({
-      fields: buildFields(dual()),
+      fields: currentFields(),
       headers: state.headers,
       mapping: state.mapping,
       title: '会话渲染 · 列映射',
@@ -1337,12 +1439,27 @@
   });
 
   el['dual-toggle'].addEventListener('change', function () {
+    if (el['dual-toggle'].checked) el['multi-toggle'].checked = false;
     resetGeneratedPngs();
     if (!state.rows.length) return;
     Mapping.run({
-      fields: buildFields(dual()),
+      fields: currentFields(),
       headers: state.headers,
       title: '会话渲染 · 列映射',
+      onConfirm: applyMapping
+    });
+  });
+
+  el['multi-toggle'].addEventListener('change', function () {
+    if (el['multi-toggle'].checked) el['dual-toggle'].checked = false;
+    resetGeneratedPngs();
+    if (!state.rows.length) return;
+    Mapping.run({
+      fields: currentFields(),
+      headers: state.headers,
+      title: '会话渲染 · 多对话列选择',
+      note: '勾选需要分别生成可视化 PNG 列的所有对话列。',
+      forceModal: el['multi-toggle'].checked,
       onConfirm: applyMapping
     });
   });
@@ -1388,6 +1505,8 @@
     imageGallery: imageGallery,
     bindPreviewImages: bindPreviewImages,
     prepareCaptureImages: prepareCaptureImages,
+    buildFields: buildFields,
+    matchingTraceColumn: matchingTraceColumn,
     collectSessionImageUrls: collectSessionImageUrls,
     prefetchImageUrls: prefetchImageUrls,
     isCurrentImageHelperVersion: isCurrentImageHelperVersion

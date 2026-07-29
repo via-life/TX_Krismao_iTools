@@ -430,6 +430,25 @@
     return output;
   }
 
+  async function normalizePngColumns(pngColumns) {
+    if (!Array.isArray(pngColumns) || !pngColumns.length) {
+      throw new Error('没有可写入的 PNG 列');
+    }
+    var headers = Object.create(null);
+    var output = [];
+    for (var index = 0; index < pngColumns.length; index++) {
+      var column = pngColumns[index] || {};
+      var header = String(column.header || 'png').trim() || 'png';
+      if (headers[header]) throw new Error('PNG 输出列名不能重复：' + header);
+      headers[header] = true;
+      output.push({
+        header: header,
+        pairs: await normalizeRowPngPairs(column.pairs)
+      });
+    }
+    return output;
+  }
+
   function createInlineStringCell(documentNode, reference, value) {
     var cell = documentNode.createElementNS(MAIN_NS, 'c');
     cell.setAttribute('r', reference);
@@ -577,11 +596,12 @@
     });
   }
 
-  function updateTableDocument(tableDocument, oldColumn, newColumn, newMaxRow) {
+  function updateTableDocument(tableDocument, oldColumn, newHeaders, newMaxRow) {
     var table = getElements(tableDocument, 'table')[0];
     if (!table) return;
     var tableRange = parseRange(table.getAttribute('ref'));
     if (!tableRange || tableRange.start.row !== 1 || tableRange.end.column !== oldColumn) return;
+    var newColumn = oldColumn + newHeaders.length;
     extendRangeAttribute(table, 'ref', newColumn, newMaxRow);
     getElements(table, 'autoFilter').forEach(function (autoFilter) {
       extendRangeAttribute(autoFilter, 'ref', newColumn, newMaxRow);
@@ -592,11 +612,13 @@
     var maxId = columns.reduce(function (maximum, column) {
       return Math.max(maximum, Number(column.getAttribute('id')) || 0);
     }, 0);
-    var column = tableDocument.createElementNS(table.namespaceURI || MAIN_NS, 'tableColumn');
-    column.setAttribute('id', String(maxId + 1));
-    column.setAttribute('name', 'png');
-    tableColumns.appendChild(column);
-    tableColumns.setAttribute('count', String(columns.length + 1));
+    newHeaders.forEach(function (header, index) {
+      var column = tableDocument.createElementNS(table.namespaceURI || MAIN_NS, 'tableColumn');
+      column.setAttribute('id', String(maxId + index + 1));
+      column.setAttribute('name', header);
+      tableColumns.appendChild(column);
+    });
+    tableColumns.setAttribute('count', String(columns.length + newHeaders.length));
   }
 
   function directChild(root, localName) {
@@ -628,7 +650,8 @@
     var scale = Math.min(1, MAX_IMAGE_WIDTH_PX / png.width, MAX_IMAGE_HEIGHT_PX / png.height);
     png.displayWidth = Math.max(1, Math.floor(png.width * scale));
     png.displayHeight = Math.max(1, Math.floor(png.height * scale));
-    row.setAttribute('ht', String(png.displayHeight * 0.75));
+    var height = Math.max(Number(row.getAttribute('ht')) || 0, png.displayHeight * 0.75);
+    row.setAttribute('ht', String(height));
     row.setAttribute('customHeight', 'true');
   }
 
@@ -918,9 +941,9 @@
     zip.file(path, serializeXml(documentNode));
   }
 
-  async function appendPngsToWorkbook(arrayBuffer, rowPngPairs) {
+  async function appendPngColumnsToWorkbook(arrayBuffer, pngColumns) {
     if (!global.JSZip) throw new Error('缺少 JSZip，无法生成内嵌图片 Excel');
-    var pairs = await normalizeRowPngPairs(rowPngPairs);
+    var columns = await normalizePngColumns(pngColumns);
     var zip = await global.JSZip.loadAsync(arrayBuffer);
     var workbookPath = 'xl/workbook.xml';
     var workbookRelsPath = 'xl/_rels/workbook.xml.rels';
@@ -941,45 +964,69 @@
     var sheetData = getElements(sheetDocument, 'sheetData')[0];
     if (!sheetData) throw new Error('第一个工作表缺少 sheetData');
     var bounds = findSheetBounds(sheetDocument);
-    if (bounds.maxColumn >= 16384) throw new Error('工作表已达到 Excel 最大列数，无法新增 png');
-    var newColumn = bounds.maxColumn + 1;
-    var newColumnName = columnNumberToName(newColumn);
-    var maxWrittenRow = pairs.reduce(function (maximum, pair) {
-      return Math.max(maximum, pair.row);
+    if (bounds.maxColumn + columns.length > 16384) {
+      throw new Error('工作表剩余列数不足，无法新增全部 PNG 列');
+    }
+    var maxWrittenRow = columns.reduce(function (columnMaximum, column) {
+      return column.pairs.reduce(function (maximum, pair) {
+        return Math.max(maximum, pair.row);
+      }, columnMaximum);
     }, 1);
     var newMaxRow = Math.max(bounds.maxRow, maxWrittenRow);
 
     var rowIndex = createRowIndex(sheetData);
     var headerRow = findOrCreateIndexedRow(sheetDocument, sheetData, 1, rowIndex);
-    var headerCell = createInlineStringCell(sheetDocument, newColumnName + '1', 'png');
-    appendCell(headerRow, inheritLeftStyle(headerRow, headerCell, newColumn), newColumn);
-    pairs.forEach(function (pair) {
-      var row = findOrCreateIndexedRow(sheetDocument, sheetData, pair.row, rowIndex);
-      var cell = createBlankCell(sheetDocument, newColumnName + pair.row);
-      appendCell(row, inheritLeftStyle(row, cell, newColumn), newColumn);
-      setImageRowHeight(row, pair);
+    columns.forEach(function (column, columnIndex) {
+      var targetColumn = bounds.maxColumn + columnIndex + 1;
+      var targetColumnName = columnNumberToName(targetColumn);
+      var headerCell = createInlineStringCell(
+        sheetDocument,
+        targetColumnName + '1',
+        column.header
+      );
+      appendCell(
+        headerRow,
+        inheritLeftStyle(headerRow, headerCell, targetColumn),
+        targetColumn
+      );
+      column.pairs.forEach(function (pair) {
+        var row = findOrCreateIndexedRow(sheetDocument, sheetData, pair.row, rowIndex);
+        var cell = createBlankCell(sheetDocument, targetColumnName + pair.row);
+        appendCell(row, inheritLeftStyle(row, cell, targetColumn), targetColumn);
+        setImageRowHeight(row, pair);
+      });
+      var maxDisplayWidth = column.pairs.reduce(function (maximum, pair) {
+        return Math.max(maximum, pair.displayWidth);
+      }, 1);
+      setImageColumnWidth(sheetDocument, targetColumn, maxDisplayWidth);
     });
-    var maxDisplayWidth = pairs.reduce(function (maximum, pair) {
-      return Math.max(maximum, pair.displayWidth);
-    }, 1);
-    setImageColumnWidth(sheetDocument, newColumn, maxDisplayWidth);
-    updateSheetRanges(sheetDocument, bounds, newColumn, newMaxRow);
+    var lastColumn = bounds.maxColumn + columns.length;
+    updateSheetRanges(sheetDocument, bounds, lastColumn, newMaxRow);
 
     var drawingParts = await ensureDrawingParts(zip, sheetDocument, sheetPath);
     var pictureId = nextPictureId(drawingParts.drawingDocument);
     var nextMedia = createMediaPathAllocator(zip, drawingParts.drawingPath);
     var nextImageRelationshipId =
       createRelationshipIdAllocator(drawingParts.drawingRelsDocument);
-    pairs.forEach(function (pair) {
-      var mediaPath = nextMedia();
-      var target = relativePartTarget(drawingParts.drawingPath, mediaPath);
-      var relationshipId = appendImageRelationship(
-        drawingParts.drawingRelsDocument,
-        target,
-        nextImageRelationshipId()
-      );
-      zip.file(mediaPath, pair.bytes, { binary: true, compression: 'STORE' });
-      appendPictureAnchor(drawingParts.drawingDocument, newColumn, pair, relationshipId, pictureId++);
+    columns.forEach(function (column, columnIndex) {
+      var targetColumn = bounds.maxColumn + columnIndex + 1;
+      column.pairs.forEach(function (pair) {
+        var mediaPath = nextMedia();
+        var target = relativePartTarget(drawingParts.drawingPath, mediaPath);
+        var relationshipId = appendImageRelationship(
+          drawingParts.drawingRelsDocument,
+          target,
+          nextImageRelationshipId()
+        );
+        zip.file(mediaPath, pair.bytes, { binary: true, compression: 'STORE' });
+        appendPictureAnchor(
+          drawingParts.drawingDocument,
+          targetColumn,
+          pair,
+          relationshipId,
+          pictureId++
+        );
+      });
     });
 
     var tableParts = getElements(sheetDocument, 'tablePart');
@@ -990,7 +1037,12 @@
       var tableFile = tablePath && zip.file(tablePath);
       if (!tableFile) continue;
       var tableDocument = parseXml(await tableFile.async('string'), tablePath);
-      updateTableDocument(tableDocument, bounds.maxColumn, newColumn, newMaxRow);
+      updateTableDocument(
+        tableDocument,
+        bounds.maxColumn,
+        columns.map(function (column) { return column.header; }),
+        newMaxRow
+      );
       zip.file(tablePath, serializeXml(tableDocument));
     }
 
@@ -1009,9 +1061,16 @@
     return output;
   }
 
+  function appendPngsToWorkbook(arrayBuffer, rowPngPairs) {
+    return appendPngColumnsToWorkbook(arrayBuffer, [
+      { header: 'png', pairs: rowPngPairs }
+    ]);
+  }
+
   global.Tool3Data = {
     parseConversation: parseConversation,
     isSafeImageUrl: isSafeImageUrl,
+    appendPngColumnsToWorkbook: appendPngColumnsToWorkbook,
     appendPngsToWorkbook: appendPngsToWorkbook
   };
 })(window);
