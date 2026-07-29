@@ -690,7 +690,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 5)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 6)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -701,7 +701,7 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.5 或更高版本并在扩展页重新加载。' :
+      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.6 或更高版本并在扩展页重新加载。' :
       (connected ? '浏览器图片助手已连接。' :
         (stateName === 'checking' ? '正在检测浏览器图片助手…' :
           '未检测到浏览器图片助手，请按下方步骤安装。'));
@@ -824,6 +824,18 @@
     if (message.type === 'PONG') {
       clearTimeout(imageHelper.pingTimer);
       updateImageHelperStatus('connected', message.version);
+      return;
+    }
+    if (message.type === 'IMAGE_READ_STATUS') {
+      if (!message.ok) {
+        var setupMessage = safeErrorMessage(
+          message.error,
+          '扩展无法启用当前标签页的图片读取规则。'
+        );
+        el['img-helper-status'].className = 't3-helper-status is-missing';
+        el['img-helper-status'].textContent =
+          '浏览器图片助手已连接，但图片读取规则启用失败：' + setupMessage;
+      }
       return;
     }
     if (message.type !== 'IMAGE_RESULT' || !message.requestId) return;
