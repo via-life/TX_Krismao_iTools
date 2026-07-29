@@ -37,14 +37,14 @@
           <span>逐会话生成 PNG，在原工作簿最右侧新增 <b>png</b> 列并以内嵌图片写入；全程不上传云端、不生成链接。</span>
         </div>
         <details class="t3-export-details" open>
-          <summary>Chrome 图片助手（鉴权图片自动读取）</summary>
+          <summary>浏览器图片助手（鉴权图片自动读取）</summary>
           <div class="t3-helper-status is-checking" id="img-helper-status" role="status">
-            正在检测 Chrome 图片助手…
+            正在检测浏览器图片助手…
           </div>
           <div class="t3-helper-install" id="img-helper-install" hidden>
-            <p>未检测到图片助手或版本过旧。安装/升级后，网页即可使用当前 Chrome 登录态读取鉴权图片：</p>
+            <p>未检测到图片助手或版本过旧。安装/升级后，网页即可使用当前 Chromium 浏览器登录态读取鉴权图片：</p>
             <ol>
-              <li>打开“本地插件交付”目录中的 <code>iTools浏览器助手-v2.1.3</code> 文件夹；也可先解压同目录的版本化私有 ZIP。</li>
+              <li>打开“本地插件交付”目录中的 <code>iTools浏览器助手-v2.1.4</code> 文件夹；也可先解压同目录的版本化私有 ZIP。</li>
               <li>点击下方按钮复制 <code>chrome://extensions</code>，粘贴到地址栏打开。</li>
               <li>开启右上角“开发者模式”，点击“加载已解压的扩展程序”，选择刚才解压的文件夹。</li>
               <li>刷新本页面，看到“已连接”后即可生成 PNG Excel。</li>
@@ -53,7 +53,7 @@
           </div>
           <div class="t3-helper-connected" id="img-helper-connected" hidden>
             <strong>图片助手已连接 · v<span id="img-helper-version">—</span></strong>
-            <span>自动使用当前 Chrome 登录态，不读取/显示 Cookie。</span>
+            <span>仅在固定图片请求鉴权失败时由后台读取匹配 Cookie，不向网页显示或保存。</span>
           </div>
           <button class="btn btn--ghost btn--sm t3-img-reload" id="img-reload" type="button">重新加载当前会话图片</button>
         </details>
@@ -92,7 +92,7 @@
           </div>
         </div>
       </div>
-      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。鉴权图片会在预览阶段通过 Chrome 图片助手复用当前浏览器登录态并转为本地缓存；导出直接复用当前预览，不会再次请求远端。仍无法打开的图片会显示原链接并继续处理。</div>
+      <div class="status is-warn" style="margin-top:12px">上传 .xlsx 后，页面会在浏览器本地逐张生成会话 PNG，并在原工作簿最右侧新增 <b>png</b> 列后下载，原文件不会被覆盖。鉴权图片会在导出前通过浏览器图片助手读取并转为本地 Blob；预览可见不代表 Canvas 已取得图片字节。仍无法打开的图片会显示原链接并继续处理。</div>
     </div>
   </div>
 </div>
@@ -116,6 +116,6 @@
 <script src="js/common.js"></script>
 <script src="js/mapping.js"></script>
 <script src="js/tool3-data.js"></script>
-<script src="js/tool3.js?v=20260729-1"></script>
+<script src="js/tool3.js?v=20260729-2"></script>
 </body>
 </html>

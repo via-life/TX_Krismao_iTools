@@ -136,7 +136,7 @@
       return code === 'EXTENSION_MISSING' || code === 'UNSUPPORTED_IMAGE_URL';
     });
     return '（其中 ' + codes.length + ' 张图片未能读取字节，已显示为链接' +
-      (missingExtension ? '；请确认 Chrome 图片助手已连接且图片为受支持地址' : '') +
+      (missingExtension ? '；请确认浏览器图片助手已连接且图片为受支持地址' : '') +
       '，详见浏览器控制台日志）';
   }
 
@@ -690,7 +690,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 3)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 4)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -701,10 +701,10 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      'Chrome 图片助手版本过旧，请从本地插件交付目录安装 2.1.3 或更高版本并在扩展页重新加载。' :
-      (connected ? 'Chrome 图片助手已连接。' :
-        (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
-          '未检测到 Chrome 图片助手，请按下方步骤安装。'));
+      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.4 或更高版本并在扩展页重新加载。' :
+      (connected ? '浏览器图片助手已连接。' :
+        (stateName === 'checking' ? '正在检测浏览器图片助手…' :
+          '未检测到浏览器图片助手，请按下方步骤安装。'));
     el['img-helper-install'].hidden = (connected && !outdated) || stateName === 'checking';
     el['img-helper-connected'].hidden = !connected || outdated;
     if (connected) el['img-helper-version'].textContent = imageHelper.version;
@@ -791,7 +791,7 @@
       return Promise.reject(unsupportedError);
     }
     if (!imageHelper.connected) {
-      var missingError = new Error('未检测到 Chrome 图片助手，请按页面提示安装并刷新');
+      var missingError = new Error('未检测到浏览器图片助手，请按页面提示安装并刷新');
       missingError.code = 'EXTENSION_MISSING';
       return Promise.reject(missingError);
     }
@@ -799,7 +799,7 @@
       var requestId = 'tool3-' + Date.now() + '-' + (++imageHelper.requestSequence);
       var timer = setTimeout(function () {
         delete imageHelper.pending[requestId];
-        var timeoutError = new Error('Chrome 图片助手响应超时，请确认扩展已启用后刷新页面');
+        var timeoutError = new Error('浏览器图片助手响应超时，请确认扩展已启用后刷新页面');
         timeoutError.code = 'EXTENSION_TIMEOUT';
         reject(timeoutError);
       }, IMAGE_HELPER_TIMEOUT_MS);
@@ -833,7 +833,7 @@
     delete imageHelper.pending[message.requestId];
     if (!message.ok) {
       var helperError = message.error || {};
-      var failure = new Error(helperError.message || 'Chrome 图片助手读取失败');
+      var failure = new Error(helperError.message || '浏览器图片助手读取失败');
       failure.code = String(helperError.code || 'EXTENSION_ERROR');
       pending.reject(failure);
       return;
@@ -1194,10 +1194,10 @@
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(value).then(copied).catch(function () {
-        window.prompt('请复制并粘贴到 Chrome 地址栏：', value);
+        window.prompt('请复制并粘贴到浏览器地址栏：', value);
       });
     } else {
-      window.prompt('请复制并粘贴到 Chrome 地址栏：', value);
+      window.prompt('请复制并粘贴到浏览器地址栏：', value);
     }
   });
   window.addEventListener('message', onImageHelperMessage);
