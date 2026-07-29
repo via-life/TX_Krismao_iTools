@@ -410,6 +410,12 @@
     return { width: width, height: height };
   }
 
+  async function readPngSourceDimensions(source) {
+    var headerSource = source && typeof source.slice === 'function' &&
+      typeof source.arrayBuffer === 'function' ? source.slice(0, 24) : source;
+    return readPngDimensions(await toUint8Array(headerSource));
+  }
+
   async function normalizeRowPngPairs(rowPngPairs) {
     if (!Array.isArray(rowPngPairs)) throw new Error('rowPngPairs 必须是数组');
     if (!rowPngPairs.length) throw new Error('没有可写入的 PNG');
@@ -422,9 +428,13 @@
       if (rows[row]) throw new Error('同一 Excel 行不能写入多张 PNG');
       rows[row] = true;
       var source = pair.blob != null ? pair.blob : pair.bytes;
-      var bytes = await toUint8Array(source);
-      var dimensions = readPngDimensions(bytes);
-      output.push({ row: row, bytes: bytes, width: dimensions.width, height: dimensions.height });
+      var dimensions = await readPngSourceDimensions(source);
+      output.push({
+        row: row,
+        data: source,
+        width: dimensions.width,
+        height: dimensions.height
+      });
     }
     output.sort(function (a, b) { return a.row - b.row; });
     return output;
@@ -1018,7 +1028,7 @@
           target,
           nextImageRelationshipId()
         );
-        zip.file(mediaPath, pair.bytes, { binary: true, compression: 'STORE' });
+        zip.file(mediaPath, pair.data, { binary: true, compression: 'STORE' });
         appendPictureAnchor(
           drawingParts.drawingDocument,
           targetColumn,

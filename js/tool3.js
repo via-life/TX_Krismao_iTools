@@ -32,7 +32,12 @@
   };
   var DIRECT_IMAGE_TIMEOUT_MS = 8000;
   var IMAGE_HELPER_TIMEOUT_MS = 35000;
-  var MAX_PENDING_PNG_ENCODINGS = 3;
+  // Excel 最终只会按 900 × 1400 px 展示图片；生成更大的 PNG 只会增加
+  // html2canvas、PNG 编码和工作簿打包的时间与内存占用。
+  var EXCEL_PNG_MAX_WIDTH = 900;
+  var EXCEL_PNG_MAX_HEIGHT = 1400;
+  var MAX_PENDING_PNG_ENCODINGS = 2;
+  var EXPORT_UI_YIELD_INTERVAL = 3;
   var IMAGE_PREFETCH_CONCURRENCY = 4;
   var MAX_CAPTURE_CACHE_ENTRIES = 24;
   var MAX_CAPTURE_CACHE_BYTES = 96 * 1024 * 1024;
@@ -1222,6 +1227,22 @@
     });
   }
 
+  function excelCaptureScale(node) {
+    var width = Math.max(1, node.scrollWidth || node.offsetWidth || 1);
+    var height = Math.max(1, node.scrollHeight || node.offsetHeight || 1);
+    return Math.min(
+      1,
+      EXCEL_PNG_MAX_WIDTH / width,
+      EXCEL_PNG_MAX_HEIGHT / height
+    );
+  }
+
+  function yieldToBrowser() {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, 0);
+    });
+  }
+
   function captureVisibleSession(options) {
     options = options || {};
     var node = document.getElementById('shot');
@@ -1229,9 +1250,10 @@
     return prepareCaptureImages(node).then(function () {
       return options.skipPaint ? null : nextPaint();
     }).then(function () {
+      var scale = options.fitExcel ? excelCaptureScale(node) : (options.scale || 2);
       return html2canvas(node, {
         backgroundColor: '#faf9f7',
-        scale: options.scale || 2,
+        scale: scale,
         useCORS: false,
         logging: false
       });
@@ -1348,14 +1370,17 @@
 
       function encodeSession(canvas, index) {
         return canvasToBlob(canvas).then(function (blob) {
-          return blob.arrayBuffer();
-        }).then(function (buffer) {
-          state.screenshotPngs[index] = new Uint8Array(buffer);
+          // Blob 由浏览器托管，避免再复制一份 Uint8Array 常驻 JS 堆。
+          state.screenshotPngs[index] = blob;
           completed++;
           markSessionGenerated(index);
           return { ok: true, index: index };
         }).catch(function (error) {
           return { ok: false, index: index, error: error };
+        }).finally(function () {
+          // 立即释放 html2canvas 的像素缓冲。
+          canvas.width = 1;
+          canvas.height = 1;
         });
       }
 
@@ -1371,6 +1396,9 @@
 
       for (cursor = 0; cursor < state.sessions.length; cursor++) {
         if (state.screenshotPngs[cursor]) continue;
+        if (cursor && cursor % EXPORT_UI_YIELD_INTERVAL === 0) {
+          await yieldToBrowser();
+        }
         setStatus('正在读取图片并生成会话 PNG…（' +
           (completed + pendingEncodes.length + 1) + '/' + state.sessions.length + '）');
         var current = cursor;
@@ -1382,7 +1410,7 @@
           collectSessionImageUrls(state.sessions[nextIndex]) : [];
         prefetchImageUrls(nextUrls);
         var canvas = await captureSession(current, {
-          scale: 1,
+          fitExcel: true,
           releaseImages: false,
           skipPaint: true
         });
@@ -1509,6 +1537,7 @@
     matchingTraceColumn: matchingTraceColumn,
     collectSessionImageUrls: collectSessionImageUrls,
     prefetchImageUrls: prefetchImageUrls,
+    excelCaptureScale: excelCaptureScale,
     isCurrentImageHelperVersion: isCurrentImageHelperVersion
   };
 })();
