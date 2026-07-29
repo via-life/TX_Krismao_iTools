@@ -32,10 +32,10 @@
   };
   var DIRECT_IMAGE_TIMEOUT_MS = 8000;
   var IMAGE_HELPER_TIMEOUT_MS = 35000;
-  // Excel 最终只会按 900 × 1400 px 展示图片；生成更大的 PNG 只会增加
-  // html2canvas、PNG 编码和工作簿打包的时间与内存占用。
+  // 快速模式按 Excel 单行最高 409.5 磅（约 546 px）生成预览图；
+  // 默认高清模式仍保留完整 PNG，供用户放大或另存查看。
   var EXCEL_PNG_MAX_WIDTH = 900;
-  var EXCEL_PNG_MAX_HEIGHT = 1400;
+  var EXCEL_PNG_MAX_HEIGHT = 546;
   var MAX_PENDING_PNG_ENCODINGS = 2;
   var EXPORT_UI_YIELD_INTERVAL = 3;
   var IMAGE_PREFETCH_CONCURRENCY = 4;
@@ -56,6 +56,7 @@
     'dropzone', 'pick-btn', 'file-input', 'file-name', 'status', 'render-section',
     'sess-list', 'sess-count', 'main-title', 'main-sub', 'render-scroll',
     'export-one', 'export-all', 'generate-png-excel', 'remap-btn', 'dual-toggle', 'multi-toggle',
+    'excel-fast-mode',
     'lightbox', 'lb-img', 'lb-stage', 'img-reload', 'img-helper-status',
     'img-helper-install', 'img-helper-connected', 'img-helper-version',
     'copy-extensions-url'
@@ -1362,6 +1363,8 @@
     }, 0);
     var startedAt = Date.now();
     var workbookStartedAt = 0;
+    var fastMode = el['excel-fast-mode'].checked;
+    var maxPendingEncodes = fastMode ? MAX_PENDING_PNG_ENCODINGS : 1;
     setBusy(true);
     resetCaptureFailures();
 
@@ -1396,10 +1399,11 @@
 
       for (cursor = 0; cursor < state.sessions.length; cursor++) {
         if (state.screenshotPngs[cursor]) continue;
-        if (cursor && cursor % EXPORT_UI_YIELD_INTERVAL === 0) {
+        if (cursor && cursor % (fastMode ? EXPORT_UI_YIELD_INTERVAL : 1) === 0) {
           await yieldToBrowser();
         }
-        setStatus('正在读取图片并生成会话 PNG…（' +
+        setStatus('正在读取图片并生成会话 PNG（' +
+          (fastMode ? '省内存快速模式' : '高清模式') + '）…（' +
           (completed + pendingEncodes.length + 1) + '/' + state.sessions.length + '）');
         var current = cursor;
         var currentUrls = collectSessionImageUrls(state.sessions[current]);
@@ -1410,13 +1414,14 @@
           collectSessionImageUrls(state.sessions[nextIndex]) : [];
         prefetchImageUrls(nextUrls);
         var canvas = await captureSession(current, {
-          fitExcel: true,
+          fitExcel: fastMode,
+          scale: 1,
           releaseImages: false,
           skipPaint: true
         });
         trimCaptureImageCache(imageUrlSet(nextUrls));
         pendingEncodes.push(encodeSession(canvas, current));
-        if (pendingEncodes.length >= MAX_PENDING_PNG_ENCODINGS) await settleNextEncode();
+        if (pendingEncodes.length >= maxPendingEncodes) await settleNextEncode();
       }
       while (pendingEncodes.length) await settleNextEncode();
       setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 ' +

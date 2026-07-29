@@ -12,7 +12,8 @@
   var IMAGE_REL_TYPE = REL_NS + '/image';
   var EMU_PER_PIXEL = 9525;
   var MAX_IMAGE_WIDTH_PX = 900;
-  var MAX_IMAGE_HEIGHT_PX = 1400;
+  var MAX_EXCEL_ROW_HEIGHT_POINTS = 409.5;
+  var MAX_IMAGE_HEIGHT_PX = Math.floor(MAX_EXCEL_ROW_HEIGHT_POINTS / 0.75);
 
   function uniq(values) {
     var seen = Object.create(null);
@@ -656,11 +657,25 @@
     return cell;
   }
 
+  function excelImageLayout(width, height, existingRowHeight) {
+    var scale = Math.min(1, MAX_IMAGE_WIDTH_PX / width, MAX_IMAGE_HEIGHT_PX / height);
+    var displayWidth = Math.max(1, Math.floor(width * scale));
+    var displayHeight = Math.max(1, Math.floor(height * scale));
+    return {
+      displayWidth: displayWidth,
+      displayHeight: displayHeight,
+      rowHeight: Math.min(
+        MAX_EXCEL_ROW_HEIGHT_POINTS,
+        Math.max(Number(existingRowHeight) || 0, displayHeight * 0.75)
+      )
+    };
+  }
+
   function setImageRowHeight(row, png) {
-    var scale = Math.min(1, MAX_IMAGE_WIDTH_PX / png.width, MAX_IMAGE_HEIGHT_PX / png.height);
-    png.displayWidth = Math.max(1, Math.floor(png.width * scale));
-    png.displayHeight = Math.max(1, Math.floor(png.height * scale));
-    var height = Math.max(Number(row.getAttribute('ht')) || 0, png.displayHeight * 0.75);
+    var layout = excelImageLayout(png.width, png.height, row.getAttribute('ht'));
+    png.displayWidth = layout.displayWidth;
+    png.displayHeight = layout.displayHeight;
+    var height = layout.rowHeight;
     row.setAttribute('ht', String(height));
     row.setAttribute('customHeight', 'true');
   }
@@ -1080,6 +1095,7 @@
   global.Tool3Data = {
     parseConversation: parseConversation,
     isSafeImageUrl: isSafeImageUrl,
+    excelImageLayout: excelImageLayout,
     appendPngColumnsToWorkbook: appendPngColumnsToWorkbook,
     appendPngsToWorkbook: appendPngsToWorkbook
   };
