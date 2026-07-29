@@ -1003,7 +1003,7 @@
       type: 'blob',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       compression: 'DEFLATE',
-      compressionOptions: { level: 3 },
+      compressionOptions: { level: 1 },
       streamFiles: true
     });
     return output;

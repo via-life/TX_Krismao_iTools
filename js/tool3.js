@@ -19,6 +19,8 @@
     busy: false
   };
   var captureImageCache = {};
+  var captureImageCacheBytes = 0;
+  var captureImageCacheClock = 0;
   var captureFailures = {};
   var imageHelper = {
     connected: false,
@@ -30,6 +32,9 @@
   var DIRECT_IMAGE_TIMEOUT_MS = 8000;
   var IMAGE_HELPER_TIMEOUT_MS = 35000;
   var MAX_PENDING_PNG_ENCODINGS = 3;
+  var IMAGE_PREFETCH_CONCURRENCY = 4;
+  var MAX_CAPTURE_CACHE_ENTRIES = 24;
+  var MAX_CAPTURE_CACHE_BYTES = 96 * 1024 * 1024;
   var MAX_CAPTURE_IMAGE_BYTES = 30 * 1024 * 1024;
   var ALLOWED_CAPTURE_IMAGE_MIME_TYPES = {
     'image/avif': true,
@@ -121,6 +126,84 @@
       if (item && item.objectUrl) URL.revokeObjectURL(item.objectUrl);
     });
     captureImageCache = {};
+    captureImageCacheBytes = 0;
+    captureImageCacheClock = 0;
+  }
+
+  function touchCaptureImage(entry) {
+    if (entry) entry.lastUsed = ++captureImageCacheClock;
+  }
+
+  function trimCaptureImageCache(protectedUrls) {
+    protectedUrls = protectedUrls || {};
+    var completed = Object.keys(captureImageCache).filter(function (url) {
+      return captureImageCache[url] && captureImageCache[url].objectUrl;
+    });
+    completed.sort(function (left, right) {
+      return (captureImageCache[left].lastUsed || 0) - (captureImageCache[right].lastUsed || 0);
+    });
+    while (
+      completed.length > MAX_CAPTURE_CACHE_ENTRIES ||
+      captureImageCacheBytes > MAX_CAPTURE_CACHE_BYTES
+    ) {
+      var url = completed.shift();
+      if (!url) break;
+      if (protectedUrls[url]) {
+        completed.push(url);
+        if (completed.every(function (item) { return protectedUrls[item]; })) break;
+        continue;
+      }
+      var entry = captureImageCache[url];
+      if (!entry || !entry.objectUrl) continue;
+      URL.revokeObjectURL(entry.objectUrl);
+      captureImageCacheBytes = Math.max(0, captureImageCacheBytes - (entry.size || 0));
+      delete captureImageCache[url];
+    }
+  }
+
+  function collectSessionImageUrls(session) {
+    var seen = {};
+    var urls = [];
+    ((session && session.models) || []).forEach(function (model) {
+      (((model || {}).rec || {}).turns || []).forEach(function (turn) {
+        ['user_images', 'ai_images'].forEach(function (key) {
+          (turn[key] || []).forEach(function (url) {
+            url = String(url || '').trim();
+            if (!url || seen[url] || !D.isSafeImageUrl(url)) return;
+            seen[url] = true;
+            urls.push(url);
+          });
+        });
+      });
+    });
+    return urls;
+  }
+
+  function imageUrlSet(urls) {
+    var result = {};
+    (urls || []).forEach(function (url) { result[url] = true; });
+    return result;
+  }
+
+  function prefetchImageUrls(urls) {
+    urls = urls || [];
+    var cursor = 0;
+    var results = new Array(urls.length);
+    async function worker() {
+      while (cursor < urls.length) {
+        var index = cursor++;
+        try {
+          await captureImageUrl(urls[index]);
+          results[index] = true;
+        } catch (_) {
+          results[index] = false;
+        }
+      }
+    }
+    var workers = [];
+    var count = Math.min(IMAGE_PREFETCH_CONCURRENCY, urls.length);
+    for (var index = 0; index < count; index++) workers.push(worker());
+    return Promise.all(workers).then(function () { return results; });
   }
 
   function resetCaptureFailures() {
@@ -952,7 +1035,10 @@
   }
 
   function captureImageUrl(url) {
-    if (captureImageCache[url]) return captureImageCache[url].promise;
+    if (captureImageCache[url]) {
+      touchCaptureImage(captureImageCache[url]);
+      return captureImageCache[url].promise;
+    }
     var entry = {};
     var blobPromise = imageBlobFromBrowser(url).catch(function (browserError) {
       return imageBlobFromCredentialedImage(url).catch(function (imageError) {
@@ -979,6 +1065,9 @@
         throw cancelled;
       }
       entry.objectUrl = URL.createObjectURL(blob);
+      entry.size = blob.size;
+      captureImageCacheBytes += entry.size;
+      touchCaptureImage(entry);
       return entry.objectUrl;
     }).catch(function (error) {
       // 失败不缓存，避免扩展尚未连上等瞬时失败永久毒化后续导出（再次点击可重试）。
@@ -1032,17 +1121,7 @@
   }
 
   function releaseCaptureImages(root) {
-    var seen = {};
-    root.querySelectorAll('.t3-chat-img').forEach(function (image) {
-      var original = image.getAttribute('data-url');
-      if (!original || seen[original]) return;
-      seen[original] = true;
-      var entry = captureImageCache[original];
-      if (entry && entry.objectUrl) {
-        URL.revokeObjectURL(entry.objectUrl);
-        delete captureImageCache[original];
-      }
-    });
+    trimCaptureImageCache();
   }
 
   function nextPaint() {
@@ -1158,6 +1237,8 @@
     var completed = state.screenshotPngs.reduce(function (count, png) {
       return count + (png ? 1 : 0);
     }, 0);
+    var startedAt = Date.now();
+    var workbookStartedAt = 0;
     setBusy(true);
     resetCaptureFailures();
 
@@ -1189,22 +1270,37 @@
 
       for (cursor = 0; cursor < state.sessions.length; cursor++) {
         if (state.screenshotPngs[cursor]) continue;
-        setStatus('正在生成会话 PNG…（' +
+        setStatus('正在读取图片并生成会话 PNG…（' +
           (completed + pendingEncodes.length + 1) + '/' + state.sessions.length + '）');
         var current = cursor;
+        var currentUrls = collectSessionImageUrls(state.sessions[current]);
+        await prefetchImageUrls(currentUrls);
+        var nextIndex = current + 1;
+        while (nextIndex < state.sessions.length && state.screenshotPngs[nextIndex]) nextIndex++;
+        var nextUrls = nextIndex < state.sessions.length ?
+          collectSessionImageUrls(state.sessions[nextIndex]) : [];
+        prefetchImageUrls(nextUrls);
         var canvas = await captureSession(current, {
           scale: 1,
-          releaseImages: current !== originalActive,
+          releaseImages: false,
           skipPaint: true
         });
+        trimCaptureImageCache(imageUrlSet(nextUrls));
         pendingEncodes.push(encodeSession(canvas, current));
         if (pendingEncodes.length >= MAX_PENDING_PNG_ENCODINGS) await settleNextEncode();
       }
       while (pendingEncodes.length) await settleNextEncode();
       setStatus('全部 PNG 已生成，正在保留原工作簿结构并嵌入最右侧 png 列…');
+      workbookStartedAt = Date.now();
       await downloadPngWorkbook();
       var note = captureFailureNote();
-      setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。' + note,
+      var finishedAt = Date.now();
+      var pngSeconds = ((workbookStartedAt - startedAt) / 1000).toFixed(1);
+      var workbookSeconds = ((finishedAt - workbookStartedAt) / 1000).toFixed(1);
+      var totalSeconds = ((finishedAt - startedAt) / 1000).toFixed(1);
+      setStatus('已生成 ' + outputFilename() + '；原 Excel 未修改。耗时：PNG ' +
+        pngSeconds + ' 秒，Excel 打包 ' + workbookSeconds + ' 秒，总计 ' +
+        totalSeconds + ' 秒。' + note,
         note ? 'error' : 'ok');
     }
 
@@ -1292,6 +1388,8 @@
     imageGallery: imageGallery,
     bindPreviewImages: bindPreviewImages,
     prepareCaptureImages: prepareCaptureImages,
+    collectSessionImageUrls: collectSessionImageUrls,
+    prefetchImageUrls: prefetchImageUrls,
     isCurrentImageHelperVersion: isCurrentImageHelperVersion
   };
 })();
