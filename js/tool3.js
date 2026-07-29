@@ -690,7 +690,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 4)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 5)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -701,7 +701,7 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.4 或更高版本并在扩展页重新加载。' :
+      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.5 或更高版本并在扩展页重新加载。' :
       (connected ? '浏览器图片助手已连接。' :
         (stateName === 'checking' ? '正在检测浏览器图片助手…' :
           '未检测到浏览器图片助手，请按下方步骤安装。'));
@@ -878,21 +878,97 @@
     });
   }
 
+  function imageBlobFromCredentialedImage(url) {
+    if (!imageHelper.connected) {
+      var missingError = new Error('未检测到浏览器图片助手，请按页面提示安装并刷新');
+      missingError.code = 'EXTENSION_MISSING';
+      return Promise.reject(missingError);
+    }
+    return new Promise(function (resolve, reject) {
+      var image = new Image();
+      var settled = false;
+      var timer = setTimeout(function () {
+        fail('带登录态的图片加载超时', 'CORS_IMAGE_TIMEOUT');
+      }, DIRECT_IMAGE_TIMEOUT_MS);
+
+      function cleanup() {
+        clearTimeout(timer);
+        image.onload = null;
+        image.onerror = null;
+      }
+
+      function fail(message, code) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        var error = new Error(message);
+        error.code = code;
+        reject(error);
+      }
+
+      image.onload = function () {
+        if (settled) return;
+        var width = image.naturalWidth;
+        var height = image.naturalHeight;
+        if (!width || !height || width * height > 100000000) {
+          fail('图片尺寸无效或过大', 'INVALID_IMAGE_RESPONSE');
+          return;
+        }
+        try {
+          var canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          var context = canvas.getContext('2d');
+          if (!context) {
+            fail('浏览器无法创建图片画布', 'CANVAS_UNAVAILABLE');
+            return;
+          }
+          context.drawImage(image, 0, 0);
+          canvas.toBlob(function (blob) {
+            if (settled) return;
+            if (!blob || !blob.size) {
+              fail('图片画布转换失败', 'CANVAS_EXPORT_FAILED');
+              return;
+            }
+            if (blob.size > MAX_CAPTURE_IMAGE_BYTES) {
+              fail('图片超过 30 MiB 限制', 'IMAGE_TOO_LARGE');
+              return;
+            }
+            settled = true;
+            cleanup();
+            resolve(blob);
+          }, 'image/png');
+        } catch (_) {
+          fail('图片像素仍受跨域限制', 'CORS_IMAGE_BLOCKED');
+        }
+      };
+      image.onerror = function () {
+        fail('带登录态的图片请求失败', 'CORS_IMAGE_FAILED');
+      };
+      image.crossOrigin = 'use-credentials';
+      image.referrerPolicy = 'no-referrer';
+      image.src = url;
+    });
+  }
+
   function captureImageUrl(url) {
     if (captureImageCache[url]) return captureImageCache[url].promise;
     var entry = {};
     var blobPromise = imageBlobFromBrowser(url).catch(function (browserError) {
-      return imageBlobFromExtension(url).catch(function (extensionError) {
-        // 两条取字节的路径都失败时，把双方原因都打到控制台，方便定位导出为何显示成链接。
-        if (window.console && console.warn) {
-          console.warn(
-            '[tool3] 导出无法获取图片字节：' + url +
-            '\n  页面直取失败：' + safeErrorMessage(browserError, String(browserError)) +
-            '\n  扩展读取失败：' + ((extensionError && extensionError.code) || '') + ' ' +
-            safeErrorMessage(extensionError, String(extensionError))
-          );
-        }
-        throw extensionError;
+      return imageBlobFromCredentialedImage(url).catch(function (imageError) {
+        return imageBlobFromExtension(url).catch(function (extensionError) {
+          if (window.console && console.warn) {
+            console.warn(
+              '[tool3] 导出无法获取图片字节：' + url +
+              '\n  页面直取失败：' + safeErrorMessage(browserError, String(browserError)) +
+              '\n  登录态图片失败：' + ((imageError && imageError.code) || '') + ' ' +
+              safeErrorMessage(imageError, String(imageError)) +
+              '\n  扩展读取失败：' + ((extensionError && extensionError.code) || '') + ' ' +
+              safeErrorMessage(extensionError, String(extensionError))
+            );
+          }
+          throw extensionError;
+        });
       });
     });
     entry.promise = blobPromise.then(function (blob) {
