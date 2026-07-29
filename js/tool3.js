@@ -690,7 +690,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 2)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 3)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -701,7 +701,7 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      'Chrome 图片助手版本过旧，请从本地插件交付目录安装 2.1.2 或更高版本并在扩展页重新加载。' :
+      'Chrome 图片助手版本过旧，请从本地插件交付目录安装 2.1.3 或更高版本并在扩展页重新加载。' :
       (connected ? 'Chrome 图片助手已连接。' :
         (stateName === 'checking' ? '正在检测 Chrome 图片助手…' :
           '未检测到 Chrome 图片助手，请按下方步骤安装。'));
@@ -850,9 +850,10 @@
     var timer = setTimeout(function () {
       controller.abort();
     }, DIRECT_IMAGE_TIMEOUT_MS);
+    // 元宝响应为 ACAO:* 时不能携带 Cookie，否则预览可见但导出读取像素会被 CORS 拒绝。
     return fetch(url, {
       cache: 'no-store',
-      credentials: 'include',
+      credentials: 'omit',
       referrerPolicy: 'no-referrer',
       signal: controller.signal
     }).then(function (response) {
