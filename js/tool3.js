@@ -690,7 +690,7 @@
     if (!match) return false;
     var parts = match.slice(1).map(Number);
     return parts[0] > 2 ||
-      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 7)));
+      (parts[0] === 2 && (parts[1] > 1 || (parts[1] === 1 && parts[2] >= 8)));
   }
 
   function updateImageHelperStatus(stateName, version) {
@@ -701,7 +701,7 @@
     el['img-helper-status'].className = 't3-helper-status is-' +
       (outdated ? 'missing' : stateName);
     el['img-helper-status'].textContent = outdated ?
-      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.7 或更高版本并在扩展页重新加载。' :
+      '浏览器图片助手版本过旧，请从本地插件交付目录安装 2.1.8 或更高版本并在扩展页重新加载。' :
       (connected ? '浏览器图片助手已连接。' :
         (stateName === 'checking' ? '正在检测浏览器图片助手…' :
           '未检测到浏览器图片助手，请按下方步骤安装。'));
